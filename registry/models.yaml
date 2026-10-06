@@ -1,0 +1,315 @@
+# ML Workbench model registry — Phase 0 spec (data, not code).
+# Schema documented in docs/registry.md. Flag semantics: design doc §5.
+# Models listed in docs/registry.md but absent here are catalog-only until their phase.
+
+schema_version: 1
+source: "ML Workbench: Software Documentation v1.0, §4.1/§5"
+
+models:
+  # ---------- MVP: linear baselines (enabled_phase 4) ----------
+  - id: logistic_regression
+    name: Logistic Regression
+    library: sklearn.linear_model
+    tasks: [classification]
+    family: linear
+    enabled_phase: 4
+    flags:
+      needs_scaling: true
+      handles_nan: false
+      needs_k: false
+      has_predict: true
+      has_transform: false
+      has_proba: true
+      early_stopping: false
+      uses_gpu: false
+      viz_only: false
+      explain_method: linear
+    hyperparameters:
+      - {name: C, type: float, default: 1.0, min: 0.0001, max: 100.0, log: true}
+      - {name: penalty, type: enum, default: l2, options: [l2, l1, elasticnet]}
+      - {name: solver, type: enum, default: lbfgs, options: [lbfgs, saga]}
+      - {name: class_weight, type: enum, default: null, options: [null, balanced],
+         visible_when: {task: classification}}
+      - {name: max_iter, type: int, default: 1000, min: 100, max: 10000}
+
+  - id: linear_regression
+    name: Linear Regression
+    library: sklearn.linear_model
+    tasks: [regression]
+    family: linear
+    enabled_phase: 4
+    flags:
+      needs_scaling: true
+      handles_nan: false
+      needs_k: false
+      has_predict: true
+      has_transform: false
+      has_proba: false
+      early_stopping: false
+      uses_gpu: false
+      viz_only: false
+      explain_method: linear
+    hyperparameters:
+      - {name: fit_intercept, type: bool, default: true}
+
+  - id: ridge
+    name: Ridge
+    library: sklearn.linear_model
+    tasks: [regression]
+    family: linear
+    enabled_phase: 4
+    flags:
+      needs_scaling: true
+      handles_nan: false
+      needs_k: false
+      has_predict: true
+      has_transform: false
+      has_proba: false
+      early_stopping: false
+      uses_gpu: false
+      viz_only: false
+      explain_method: linear
+    hyperparameters:
+      - {name: alpha, type: float, default: 1.0, min: 0.0001, max: 100.0, log: true}
+      - {name: fit_intercept, type: bool, default: true}
+
+  - id: lasso
+    name: Lasso
+    library: sklearn.linear_model
+    tasks: [regression]
+    family: linear
+    enabled_phase: 4
+    flags:
+      needs_scaling: true
+      handles_nan: false
+      needs_k: false
+      has_predict: true
+      has_transform: false
+      has_proba: false
+      early_stopping: false
+      uses_gpu: false
+      viz_only: false
+      explain_method: linear
+    hyperparameters:
+      - {name: alpha, type: float, default: 0.1, min: 0.0001, max: 10.0, log: true}
+      - {name: fit_intercept, type: bool, default: true}
+
+  # ---------- MVP: tree / boosting baselines (enabled_phase 4) ----------
+  - id: decision_tree
+    name: Decision Tree
+    library: sklearn.tree
+    tasks: [classification, regression]
+    family: tree
+    enabled_phase: 4
+    flags:
+      needs_scaling: false
+      handles_nan: false
+      needs_k: false
+      has_predict: true
+      has_transform: false
+      has_proba: true
+      early_stopping: false
+      uses_gpu: false
+      viz_only: false
+      explain_method: tree_shap
+    hyperparameters:
+      - {name: max_depth, type: nullable_int, default: null, min: 2, max: 64}
+      - {name: min_samples_leaf, type: int, default: 1, min: 1, max: 50}
+      - {name: criterion, type: enum, default: gini,
+         options: [gini, entropy, log_loss], visible_when: {task: classification}}
+      - {name: class_weight, type: enum, default: null, options: [null, balanced],
+         visible_when: {task: classification}}
+
+  - id: random_forest
+    name: Random Forest
+    library: sklearn.ensemble
+    tasks: [classification, regression]
+    family: tree
+    enabled_phase: 4
+    flags:
+      needs_scaling: false
+      handles_nan: false
+      needs_k: false
+      has_predict: true
+      has_transform: false
+      has_proba: true
+      early_stopping: false
+      uses_gpu: false
+      viz_only: false
+      explain_method: tree_shap
+    hyperparameters:
+      - {name: n_estimators, type: int, default: 300, min: 50, max: 2000}
+      - {name: max_depth, type: nullable_int, default: null, min: 2, max: 64}
+      - {name: min_samples_leaf, type: int, default: 1, min: 1, max: 50}
+      - {name: class_weight, type: enum, default: null, options: [null, balanced],
+         visible_when: {task: classification}}
+
+  - id: hist_gradient_boosting
+    name: HistGradientBoosting
+    library: sklearn.ensemble
+    tasks: [classification, regression]
+    family: tree
+    enabled_phase: 4
+    flags:
+      needs_scaling: false
+      handles_nan: true
+      needs_k: false
+      has_predict: true
+      has_transform: false
+      has_proba: true
+      early_stopping: true
+      uses_gpu: false
+      viz_only: false
+      explain_method: tree_shap
+    hyperparameters:
+      - {name: learning_rate, type: float, default: 0.1, min: 0.001, max: 0.5, log: true}
+      - {name: max_depth, type: nullable_int, default: null, min: 2, max: 32}
+      - {name: max_iter, type: int, default: 200, min: 50, max: 2000}
+      - {name: early_stopping_rounds, type: int, default: 50, min: 10, max: 500,
+         visible_when: {early_stopping: true}}
+      - {name: l2_regularization, type: float, default: 0.0, min: 0.0, max: 10.0}
+
+  - id: xgboost
+    name: XGBoost
+    library: xgboost
+    tasks: [classification, regression]
+    family: tree
+    enabled_phase: 4
+    flags:
+      needs_scaling: false
+      handles_nan: true
+      needs_k: false
+      has_predict: true
+      has_transform: false
+      has_proba: true
+      early_stopping: true
+      uses_gpu: false
+      viz_only: false
+      explain_method: tree_shap
+    hyperparameters:
+      - {name: n_estimators, type: int, default: 500, min: 50, max: 5000}
+      - {name: learning_rate, type: float, default: 0.05, min: 0.001, max: 0.5, log: true}
+      - {name: max_depth, type: int, default: 6, min: 2, max: 16}
+      - {name: subsample, type: float, default: 1.0, min: 0.5, max: 1.0}
+      - {name: colsample_bytree, type: float, default: 1.0, min: 0.5, max: 1.0}
+      - {name: early_stopping_rounds, type: int, default: 50, min: 10, max: 500,
+         visible_when: {early_stopping: true}}
+
+  - id: lightgbm
+    name: LightGBM
+    library: lightgbm
+    tasks: [classification, regression]
+    family: tree
+    enabled_phase: 4
+    flags:
+      needs_scaling: false
+      handles_nan: true
+      needs_k: false
+      has_predict: true
+      has_transform: false
+      has_proba: true
+      early_stopping: true
+      uses_gpu: false
+      viz_only: false
+      explain_method: tree_shap
+    hyperparameters:
+      - {name: n_estimators, type: int, default: 500, min: 50, max: 5000}
+      - {name: learning_rate, type: float, default: 0.05, min: 0.001, max: 0.5, log: true}
+      - {name: num_leaves, type: int, default: 31, min: 7, max: 511}
+      - {name: min_child_samples, type: int, default: 20, min: 1, max: 200}
+      - {name: early_stopping_rounds, type: int, default: 50, min: 10, max: 500,
+         visible_when: {early_stopping: true}}
+
+  # ---------- Reference entries for other phases (schemas completed in that phase) ----------
+  - id: kmeans
+    name: K-Means
+    library: sklearn.cluster
+    tasks: [clustering]
+    family: centroid
+    enabled_phase: 6
+    flags:
+      needs_scaling: true
+      handles_nan: false
+      needs_k: true
+      has_predict: true
+      has_transform: false
+      has_proba: false
+      early_stopping: false
+      uses_gpu: false
+      viz_only: false
+      explain_method: surrogate
+    hyperparameters:
+      - {name: n_clusters, type: int, default: 8, min: 2, max: 50,
+         visible_when: {needs_k: true}}
+      - {name: n_init, type: int, default: 10, min: 1, max: 50}
+
+  - id: pca
+    name: PCA
+    library: sklearn.decomposition
+    tasks: [dimensionality_reduction]
+    family: linear
+    enabled_phase: 6
+    flags:
+      needs_scaling: true
+      handles_nan: false
+      needs_k: false
+      has_predict: false
+      has_transform: true
+      has_proba: false
+      early_stopping: false
+      uses_gpu: false
+      viz_only: false
+      explain_method: loadings
+    hyperparameters:
+      - {name: n_components, type: nullable_int, default: null, min: 2, max: 500}
+      - {name: variance_target, type: float, default: 0.95, min: 0.8, max: 0.999}
+
+  - id: isolation_forest
+    name: Isolation Forest
+    library: sklearn.ensemble
+    tasks: [anomaly_detection]
+    family: tree
+    enabled_phase: 6
+    flags:
+      needs_scaling: false
+      handles_nan: false
+      needs_k: false
+      has_predict: true
+      has_transform: false
+      has_proba: false
+      early_stopping: false
+      uses_gpu: false
+      viz_only: false
+      explain_method: tree_shap
+    hyperparameters:
+      - {name: n_estimators, type: int, default: 200, min: 50, max: 1000}
+      - {name: contamination, type: float, default: 0.05, min: 0.001, max: 0.5}
+      - {name: max_features, type: float, default: 1.0, min: 0.1, max: 1.0}
+
+  - id: mlp
+    name: MLP
+    library: torch
+    tasks: [classification, regression]
+    family: neural
+    enabled_phase: 7
+    flags:
+      needs_scaling: true
+      handles_nan: false
+      needs_k: false
+      has_predict: true
+      has_transform: false
+      has_proba: true
+      early_stopping: true
+      uses_gpu: true
+      viz_only: false
+      explain_method: gradient
+    hyperparameters:   # neural builder presets, design doc §6.5 item 5
+      - {name: preset, type: enum, default: medium, options: [small, medium, large]}
+      - {name: dropout, type: float, default: 0.1, min: 0.0, max: 0.5}
+      - {name: optimizer, type: enum, default: adamw, options: [adam, adamw, sgd]}
+      - {name: learning_rate, type: float, default: 0.001, min: 0.00001, max: 0.1, log: true}
+      - {name: batch_size, type: enum, default: 64, options: [32, 64, 128, 256]}
+      - {name: weight_decay, type: float, default: 0.0, min: 0.0, max: 0.1}
+      - {name: epochs, type: int, default: 100, min: 10, max: 500}
+      - {name: patience, type: int, default: 10, min: 1, max: 50,
+         visible_when: {early_stopping: true}}
