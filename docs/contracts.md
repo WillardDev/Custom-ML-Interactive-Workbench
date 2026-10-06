@@ -42,7 +42,8 @@ Single source of truth (§2). Tabs read it; only the owning tab or service write
 | Field | Type | Notes |
 |---|---|---|
 | `project_id` | str | Matches `workspace/projects/<project_id>/` |
-| `dataset` | object \| null | `{version, path, hash, row_count, schema_report, loaded_at}` |
+| `dataset` | object \| null | `{version, path, data_hash, row_count, loaded_at}` — pointer at the current versioned Parquet |
+| `frame` | DataFrame \| null | In-memory copy of the current version; written back as a new version on every step (Phase 2) |
 | `task` | object \| null | `{learning_type: "supervised"\|"unsupervised", task_type, target, group, time_column, eval_labels}` — see task inference below |
 | `split` | object \| null | `{strategy, params, indices_path, fitted: bool}` |
 | `steps` | list | In-memory mirror of `steps.json` (step log, §6.2) |
@@ -55,20 +56,29 @@ Single source of truth (§2). Tabs read it; only the owning tab or service write
 
 **Invariants**
 
+- `frame` always mirrors the Parquet file `dataset.path` points at (same `data_hash`).
 - `task.learning_type == "unsupervised"` ⟹ `task.target is None`; `task.eval_labels` optional and used only for scoring (§6.1).
 - `stale[tab]` is `False` for `data` (nothing upstream of it).
 - Downstream tabs never read another tab's local widget values — only `ProjectState`.
+- Loading a dataset (op `load`) resets the step log: prior entries describe a dataset that no longer exists.
 
 ## Task inference (§6.1)
 
-Supervised: target column required.
+Supervised: target column required; task type suggested from the target column (rule `TASK-01`)
+and accepted/overridden by the user.
 - Binary target (2 unique values) → `binary`
 - Integer target with few unique values (≤ 20 ⚠ threshold) → `multiclass`
 - Numeric target with many unique values → `regression`
-- Datetime column + user confirmation → `forecasting`
+- Non-numeric (string/category) target with >2 uniques → `multiclass` ⚠ (design doc silent: string
+  class labels such as `"cat"/"dog"/"fish"` are class labels, not numbers)
+- Target with <2 distinct values → rejected (`TaskError`)
+- Datetime column + user confirmation → `forecasting` with a `time_column` (rule `TASK-02`);
+  without confirmation a datetime column is an ordinary feature
 - Group column (patient/customer ID) offered to prevent leakage; once set, every split must respect it (rule `SPLIT-07`).
 
-Unsupervised: no target; optional "evaluation labels" column held aside, never seen by fitting.
+Unsupervised: no target (setting one is rejected, rule `TASK-03`); the user picks the task type
+from `clustering`, `dimensionality_reduction`, `anomaly_detection`, `association`; an optional
+"evaluation labels" column is held aside and excluded from `feature_columns()` (never fitted).
 
 ## `steps.json` — step log (§6.2, §9)
 
@@ -84,7 +94,8 @@ dataset hash before/after so undo and staleness are verifiable.
       "id": 7,
       "tab": "cleaning",
       "op": "impute",
-      "params": {"columns": ["age"], "strategy": "median"},
+      "params": {"columns": ["age"], "strategy": "median",
+                 "version_before": "v00003", "version_after": "v00004"},
       "dataset_hash_before": "sha256:9f2a...",
       "dataset_hash_after": "sha256:c41d...",
       "created_at": "2026-10-06T10:42:11Z"
@@ -96,6 +107,9 @@ dataset hash before/after so undo and staleness are verifiable.
 - `op` vocabulary: `load`, `dedupe`, `fix_dtypes`, `drop_rows`, `impute`, `outlier_treatment`,
   `encode`, `scale`, `feature_select`, `split`, `target_transform`, `resample` (Phase 6),
   `window` (Phase 8).
+- Steps written by Phase 2 (data + cleaning) also record `params.version_before` and
+  `params.version_after`; undo restores the Parquet of `version_before` and removes that entry.
+  Only `tab == "cleaning"` entries are undoable — a `load` entry is the start of the log.
 - Script export (rule `EXPORT-01`) replays entries in order into a standalone Python script.
 
 ## Model run metadata — `models/<run_id>/meta.json` (§6.6, §6.10)
@@ -133,10 +147,17 @@ leaderboard, gating checks, and registry views read `meta.json` only.
 - Which metrics appear is decided by rules `METRIC-01`…`METRIC-08`.
 - Unsupervised runs may have no holdout; `cv` present only when CV ran (rule `TRAIN-05`).
 
-## Data hash (§6.1, §9)
+## Dataset versions and data hash (§6.1, §9)
 
+- Every dataset write creates a new immutable file
+  `workspace/projects/<project_id>/datasets/v00001.parquet` — `v` + zero-padded 5 digits, next
+  number = highest existing + 1 (ADR-004 layout).
+- Written with pinned writer settings (pyarrow, `index=False`, snappy) so identical frames produce
+  identical bytes (verified).
+- Sidecar `v00001.schema.json` = `{version, data_hash, row_count, loaded_at, writer, schema: [...]}`
+  — the schema report (dtypes, missing counts, cardinalities) plus the writer library version is
+  readable without loading the Parquet.
 - `dataset_hash = "sha256:" + sha256(bytes of the versioned Parquet file)`
-- Parquet written with pinned writer settings; library version recorded in `meta.json`.
 - Used as: cache key component (§8), reproducibility record in reports (§6.10), step-log linkage
   (`dataset_hash_before/after`), stale detection (`stale` set when current hash ≠ hash a tab last saw).
 - ⚠ Fallback if byte-hash proves unstable across library versions: content digest =
@@ -153,6 +174,8 @@ leaderboard, gating checks, and registry views read `meta.json` only.
 
 | Artifact | Format | When |
 |---|---|---|
+| Dataset version | Parquet (`datasets/vNNNNN.parquet`) | data load + every cleaning step |
+| Schema report sidecar | JSON (`datasets/vNNNNN.schema.json`) | with every dataset version |
 | Fitted preprocessing pipeline | joblib (`models/<run_id>/pipeline`) | Phase 3 |
 | Model | joblib / framework checkpoint | Phase 4 |
 | Portable inference | ONNX | Phase 5 |

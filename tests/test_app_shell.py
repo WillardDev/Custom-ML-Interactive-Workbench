@@ -2,80 +2,120 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from streamlit.testing.v1 import AppTest
+
+from ml_workbench.services.workspace import Workspace
+from ml_workbench.state import ProjectState
 
 APP_PATH = Path(__file__).resolve().parents[1] / "src" / "ml_workbench" / "app.py"
 
 
-def _app() -> AppTest:
-    return AppTest.from_file(str(APP_PATH), default_timeout=10)
+@pytest.fixture
+def app(tmp_path: Path) -> AppTest:
+    app = AppTest.from_file(str(APP_PATH), default_timeout=10)
+    app.session_state["workspace"] = Workspace(project_id="p_apptest", root=tmp_path)
+    return app
 
 
-def _set_scenario(app: AppTest, scenario: str) -> AppTest:
-    app.sidebar.radio("sim_scenario").set_value(scenario)
-    return app.run()
+def _load_sample(app: AppTest) -> AppTest:
+    app.button("data_load_sample").click().run()
+    assert not app.exception
+    return app
 
 
-def test_app_boots_on_data_tab() -> None:
-    app = _app().run()
+def _set_task(app: AppTest) -> AppTest:
+    app.selectbox("task_target").set_value("churned")
+    app.run()
+    app.button("task_set").click().run()
+    assert not app.exception
+    return app
+
+
+def _clean(app: AppTest) -> AppTest:
+    app.sidebar.radio("workflow_nav").set_value("cleaning").run()
+    assert not app.exception
+    app.button("clean_run").click().run()
+    assert not app.exception
+    return app
+
+
+def test_app_boots_on_data_tab(app: AppTest) -> None:
+    app.run()
     assert not app.exception
     assert app.header[0].value == "1. Data Insertion"
     assert app.sidebar.radio("workflow_nav").value == "data"
 
 
-def test_locked_tab_shows_gate_rule() -> None:
-    app = _app().run()
-    app.sidebar.radio("workflow_nav").set_value("training")
+def test_locked_tab_shows_gate_rule(app: AppTest) -> None:
     app.run()
+    app.sidebar.radio("workflow_nav").set_value("training").run()
     assert not app.exception
     assert app.header[0].value == "6. Training"
     assert "Locked:" in app.info[0].value
-    assert "GATE-0" in app.info[0].value
+    assert "GATE-01" in app.info[0].value
 
 
-def test_scaffold_state_unlocks_training() -> None:
-    app = _set_scenario(_app().run(), "Model trained")
-    assert not app.exception
-    app.sidebar.radio("workflow_nav").set_value("training")
+def test_real_flow_unlocks_tabs(app: AppTest) -> None:
     app.run()
-    assert not app.exception
-    assert app.header[0].value == "6. Training"
+    _load_sample(app)
+
+    state: ProjectState = app.session_state["state"]
+    assert state.dataset is not None
+    assert state.dataset.version == "v00001"
+    assert state.task is None
+
+    _set_task(app)
+    state = app.session_state["state"]
+    assert state.task is not None and state.task.target == "churned"
+
+    _clean(app)
+    state = app.session_state["state"]
+    cleaning_steps = [step for step in state.steps if step.tab == "cleaning"]
+    assert cleaning_steps
+    assert state.cleaned
+    assert state.stale["cleaning"] is False
+    assert sum(1 for value in state.stale.values() if value) == 8
+
+    app.sidebar.radio("workflow_nav").set_value("preprocessing").run()
     assert not any("Locked:" in item.value for item in app.info)
 
-
-def test_lower_scenario_relocks_tabs() -> None:
-    app = _set_scenario(_app().run(), "Model trained")
-    app = _set_scenario(app, "Nothing loaded")
-    assert not app.exception
-    app.sidebar.radio("workflow_nav").set_value("outcome")
-    app.run()
+    app.sidebar.radio("workflow_nav").set_value("training").run()
     assert "Locked:" in app.info[0].value
+    assert "GATE-01" in app.info[0].value
 
 
-def test_simulate_edit_marks_downstream_stale() -> None:
-    app = _set_scenario(_app().run(), "Task selected")
-    app.sidebar.radio("workflow_nav").set_value("cleaning")
+def test_edit_data_marks_downstream_stale(app: AppTest) -> None:
     app.run()
+    _load_sample(app)
+    _set_task(app)
+    _clean(app)
+
+    app.sidebar.radio("workflow_nav").set_value("data").run()
+    _set_task(app)
+    state: ProjectState = app.session_state["state"]
+    assert state.stale["cleaning"] is True
+
+    app.sidebar.radio("workflow_nav").set_value("cleaning").run()
     assert not app.exception
-    assert not any("Locked:" in item.value for item in app.info)
+    assert any("stale" in item.value.lower() for item in app.warning)
+    assert any("Data Insertion changed" in item.value for item in app.warning)
 
-    app.button("sim_edit").click().run()
+
+def test_undo_restores_previous_version(app: AppTest) -> None:
+    app.run()
+    _load_sample(app)
+    _set_task(app)
+    _clean(app)
+
+    state: ProjectState = app.session_state["state"]
+    cleaning_before = len([step for step in state.steps if step.tab == "cleaning"])
+    version_before = state.dataset.version if state.dataset else ""
+    assert cleaning_before >= 2
+
+    app.button("clean_undo").click().run()
     assert not app.exception
-    stale: dict[str, bool] = app.session_state["state"].stale
-    assert stale["data"] is False
-    assert stale["cleaning"] is False
-    assert sum(1 for value in stale.values() if value) == 8
-
-
-def test_simulate_rerun_respects_stale_03() -> None:
-    app = _set_scenario(_app().run(), "Model trained")
-    app.sidebar.radio("workflow_nav").set_value("cleaning")
-    app.run()
-    app.button("sim_edit").click().run()
-    app.sidebar.radio("workflow_nav").set_value("preprocessing")
-    app.run()
-    app.button("sim_rerun").click().run()
-    stale: dict[str, bool] = app.session_state["state"].stale
-    assert stale["preprocessing"] is False
-    assert stale["eda"] is True
-    assert stale["outcome"] is True
+    state = app.session_state["state"]
+    cleaning_after = [step for step in state.steps if step.tab == "cleaning"]
+    assert len(cleaning_after) == cleaning_before - 1
+    assert state.dataset is not None and state.dataset.version != version_before

@@ -1,80 +1,39 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+from pathlib import Path
+
 import streamlit as st
 
-from ml_workbench.rules import (
-    complete_rerun,
-    evaluate_gate,
-    gates,
-    mark_downstream_stale,
-    stale_banner,
-)
+from ml_workbench.rules import evaluate_gate, gates, stale_banner
 from ml_workbench.rules.gating import ALL_REQS, DESCRIPTIONS, REQUIREMENTS, GateDecision
-from ml_workbench.state import (
-    DatasetInfo,
-    ModelRun,
-    PipelineInfo,
-    ProjectState,
-    SplitInfo,
-    StepEntry,
-    TaskDefinition,
-)
+from ml_workbench.services.workspace import Workspace
+from ml_workbench.state import ProjectState
 from ml_workbench.tabs import TAB_BY_ID, TAB_ORDER, TITLES
+from ml_workbench.ui import render_cleaning_tab, render_data_tab
 
-SCENARIOS = {
-    "Nothing loaded": 0,
-    "Dataset loaded": 1,
-    "Task selected": 2,
-    "Cleaning done": 3,
-    "Split fitted": 4,
-    "Model trained": 5,
+DEFAULT_WORKSPACE_ROOT = Path(__file__).resolve().parents[2] / "workspace"
+
+RENDERERS: dict[str, Callable[[ProjectState, Workspace], None]] = {
+    "data": render_data_tab,
+    "cleaning": render_cleaning_tab,
 }
 
 
 def _state() -> ProjectState:
     if "state" not in st.session_state:
-        st.session_state["state"] = ProjectState(project_id="scaffold-demo")
+        st.session_state["state"] = ProjectState(project_id="p_local")
     state: ProjectState = st.session_state["state"]
     return state
 
 
-def _apply_scenario(state: ProjectState, level: int) -> None:
-    state.dataset = None
-    state.task = None
-    state.steps = []
-    state.split = None
-    state.pipeline = None
-    state.models = []
-    state.active_model_id = None
-
-    if level >= 1:
-        state.dataset = DatasetInfo(
-            version="v1",
-            path="data/samples/binary_classification.csv",
-            data_hash="sha256:scaffold",
-            row_count=400,
-            loaded_at="scaffold",
+def _workspace(state: ProjectState) -> Workspace:
+    if "workspace" not in st.session_state:
+        st.session_state["workspace"] = Workspace(
+            project_id=state.project_id, root=DEFAULT_WORKSPACE_ROOT
         )
-    if level >= 2:
-        state.task = TaskDefinition(
-            learning_type="supervised", task_type="binary", target="churned"
-        )
-    if level >= 3:
-        state.steps.append(StepEntry(id=1, tab="cleaning", op="dedupe", created_at="scaffold"))
-    if level >= 4:
-        state.split = SplitInfo(strategy="stratified_kfold", params={"n_splits": 5}, fitted=True)
-        state.pipeline = PipelineInfo(fitted=True, path="workspace/scaffold/pipeline")
-    if level >= 5:
-        state.models.append(
-            ModelRun(run_id="r_scaffold", model_id="hist_gradient_boosting", status="done")
-        )
-        state.active_model_id = "hist_gradient_boosting"
-
-
-def _sync_simulators(state: ProjectState) -> None:
-    st.sidebar.subheader("Scaffold: simulate state")
-    choice = st.sidebar.radio("Simulated state", list(SCENARIOS), key="sim_scenario")
-    _apply_scenario(state, SCENARIOS[choice])
+    workspace: Workspace = st.session_state["workspace"]
+    return workspace
 
 
 def _navigation(state: ProjectState) -> str:
@@ -116,24 +75,7 @@ def _requirements_panel(tab_id: str, decision: GateDecision, state: ProjectState
         st.table(rows)
 
 
-def _render_scaffold_actions(state: ProjectState, tab_id: str) -> None:
-    st.divider()
-    st.caption("Scaffold actions (removed in Phase 2)")
-    left, right = st.columns(2)
-    with left:
-        if st.button("Simulate edit of this tab", key="sim_edit"):
-            marked = mark_downstream_stale(state, tab_id)
-            if marked:
-                st.write("Marked stale:", ", ".join(TITLES[item] for item in marked))
-            else:
-                st.write("No downstream tabs to mark stale.")
-    with right:
-        if st.button("Simulate re-run of this tab", key="sim_rerun"):
-            complete_rerun(state, tab_id)
-            st.write(f"{TITLES[tab_id]} refreshed; downstream staleness unchanged (STALE-03).")
-
-
-def _render_tab(state: ProjectState, tab_id: str) -> None:
+def _render_tab(state: ProjectState, workspace: Workspace, tab_id: str) -> None:
     info = TAB_BY_ID[tab_id]
     decision = evaluate_gate(tab_id, state)
     st.header(f"{info.number}. {info.title}")
@@ -147,20 +89,23 @@ def _render_tab(state: ProjectState, tab_id: str) -> None:
     if banner:
         st.warning(banner)
 
-    st.write(f"Design specification: docs/tabs.md section {info.design_section}.")
-    st.write(f"This tab is implemented in Phase {info.implemented_phase}.")
-    _render_scaffold_actions(state, tab_id)
+    renderer = RENDERERS.get(tab_id)
+    if renderer is not None:
+        renderer(state, workspace)
+    else:
+        st.write(f"Design specification: docs/tabs.md section {info.design_section}.")
+        st.info(f"{TITLES[tab_id]} arrives in Phase {info.implemented_phase}.")
 
 
 def main() -> None:
     st.set_page_config(page_title="ML Workbench", layout="wide")
     st.sidebar.title("ML Workbench")
-    st.sidebar.caption("Phase 1 scaffold: navigation, gating, and staleness only")
+    st.sidebar.caption("Phase 2: Data Insertion and Data Cleaning are live")
 
     state = _state()
-    _sync_simulators(state)
+    workspace = _workspace(state)
     tab_id = _navigation(state)
-    _render_tab(state, tab_id)
+    _render_tab(state, workspace, tab_id)
     _sidebar_status(state)
 
 

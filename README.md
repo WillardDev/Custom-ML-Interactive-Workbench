@@ -22,13 +22,15 @@ Design source: *ML Workbench: Software Documentation v1.0 — Architecture and t
 |---|---|
 | Phase 0 — Design & contracts (no code) | **complete** |
 | Phase 1 — Foundation (scaffolding) | **complete — exit criteria met** |
-| Phase 2 — Walking skeleton | next |
+| Phase 2 — Walking skeleton | **complete — exit criteria met** |
 | Phases 3–9 — Implementation | not started |
 
 Current state: `docs/` and `registry/` hold the Phase 0 spec (124 rules, tab matrix, contracts);
-`src/` and `tests/` hold the Phase 1 foundation (project state, rules engine for gating/staleness,
-registry loader, Streamlit shell) — all checks green (ruff, mypy strict, 32 passing tests, 116
-wired as pending for later phases).
+`src/` holds the Phase 1 foundation (project state, rules engine for gating/staleness, registry
+loader, Streamlit shell). The Phase 2 walking skeleton is live: Data Insertion and Data Cleaning
+tabs with versioned Parquet storage, schema reports, the step log with undo, and task inference
+(TASK-01..03) plus cleaning rules (CLEAN-01..06) — all checks green (ruff, mypy strict, 59 passing
+tests, 105 rule tests still pending for later phases).
 
 ## MVP scope (delivered in Phases 2–5)
 
@@ -65,18 +67,37 @@ wired as pending for later phases).
 **Exit criteria:** `streamlit run` boots, gated tabs behave correctly, CI green. → *met locally;
 CI runs on first push*
 
+#### Phase 2 — Walking skeleton ✅
+
+- [x] Workspace storage per ADR-004: versioned Parquet datasets (`vNNNNN.parquet`) + schema sidecars,
+      `steps.json` step log, models/cache/reports dirs (`src/ml_workbench/services/workspace.py`)
+- [x] Data Insertion tab: sample / upload (CSV, TSV, Excel, Parquet) / SQLite, schema report,
+      hashing, dataset versioning — resets task/split/models and propagates staleness
+      (`src/ml_workbench/services/data_service.py`, `src/ml_workbench/ui/data_tab.py`)
+- [x] Task inference rules: `suggest_task_type` + `build_task` with column validation (TASK-01..03)
+- [x] Cleaning tab: duplicates/dtypes, missing-target handling, imputation (6 strategies, target never
+      imputed), model-aware outlier decision (CLEAN-04a/b/c), class-balance warning (CLEAN-06), step
+      log with per-step dataset versions and undo (CLEAN-01)
+      (`src/ml_workbench/rules/cleaning.py`, `src/ml_workbench/services/cleaning_service.py`,
+      `src/ml_workbench/ui/cleaning_tab.py`)
+- [x] App shell rewired to the real tabs with gating and stale banners; rule coverage extended
+      (TASK-01..03, CLEAN-01..06))
+
+**Exit criteria:** Data → versioned cleaned Parquet; stale flags propagate. → *met: AppTest covers
+the real flow (load sample → set task → clean → tabs unlock / stale on re-edit / undo)*
+
 ### Implementation
 
-| # | Phase | Content | Exit criteria |
-|---|---|---|---|
-| 2 | Walking skeleton | Project state manager, Data Insertion (schema report, hashing), Cleaning decision tree, step log + undo | Data → versioned cleaned Parquet; stale flags propagate |
-| 3 | Preprocessing + EDA | Pipeline rules (encoding/scaling/split from registry), EDA views per task | Leakage-safety tests pass; EDA adapts to task |
-| 4 | Modelling, Training, Prediction | Registry filtering, hyperparameter forms, CV/tuning, leaderboard, artifacts + metadata sidecars, prediction tab | Train → leaderboard → predict on tabular cls/reg; LRU lazy-load works |
-| 5 | Error Analysis, Explainability, Outcome | Task-specific error views, SHAP as background jobs, report + script export + model card + ONNX | **MVP complete:** full 10-tab flow on sample data with reproducible script |
-| 6 | Unsupervised | Clustering, PCA/UMAP, anomaly detection, surrogate explanations | Design doc Phase 2 delivered |
-| 7 | Neural networks | MLP/transformers, GPU routing, live loss curves, gradient-based explanations | Design doc Phase 3 delivered |
-| 8 | Advanced | Time series, autoencoders, association rules, auto-compare | Design doc Phase 4 delivered |
-| 9 | Production (optional) | Background job queue (Redis/Celery), multi-user projects, ONNX serving, monitoring | Design doc Phase 5 delivered |
+| # | Phase | Status | Content | Exit criteria |
+|---|---|---|---|---|
+| 2 | Walking skeleton | ✅ | Project state manager, Data Insertion (schema report, hashing), Cleaning decision tree, step log + undo | Data → versioned cleaned Parquet; stale flags propagate |
+| 3 | Preprocessing + EDA | next | Pipeline rules (encoding/scaling/split from registry), EDA views per task | Leakage-safety tests pass; EDA adapts to task |
+| 4 | Modelling, Training, Prediction | — | Registry filtering, hyperparameter forms, CV/tuning, leaderboard, artifacts + metadata sidecars, prediction tab | Train → leaderboard → predict on tabular cls/reg; LRU lazy-load works |
+| 5 | Error Analysis, Explainability, Outcome | — | Task-specific error views, SHAP as background jobs, report + script export + model card + ONNX | **MVP complete:** full 10-tab flow on sample data with reproducible script |
+| 6 | Unsupervised | — | Clustering, PCA/UMAP, anomaly detection, surrogate explanations | Design doc Phase 2 delivered |
+| 7 | Neural networks | — | MLP/transformers, GPU routing, live loss curves, gradient-based explanations | Design doc Phase 3 delivered |
+| 8 | Advanced | — | Time series, autoencoders, association rules, auto-compare | Design doc Phase 4 delivered |
+| 9 | Production (optional) | — | Background job queue (Redis/Celery), multi-user projects, ONNX serving, monitoring | Design doc Phase 5 delivered |
 
 ## Repository layout
 
@@ -101,9 +122,10 @@ ml_workbench/
 │   ├── tabs.py             tab metadata (id, order, design section, phase)
 │   ├── state.py            ProjectState and related dataclasses (docs/contracts.md)
 │   ├── registry.py         registry loader + validation + task/phase filtering
-│   ├── rules/              gating (GATE-*) and staleness (STALE-*) — pure functions
-│   ├── services/           service layer (populated from Phase 2)
-│   └── app.py              Streamlit shell: navigation, gating, staleness, scaffold simulators
+│   ├── rules/              pure rules: gating (GATE-*), staleness (STALE-*), task (TASK-*), cleaning (CLEAN-*)
+│   ├── services/           service layer: workspace (ADR-004 storage), data_service, cleaning_service
+│   ├── ui/                 renderers: data_tab (insert + task), cleaning_tab (options + step log)
+│   └── app.py              Streamlit shell: navigation, gating, stale banners, tab renderers
 └── tests/
     ├── rules/              one file per rules.md section (124 rule tests)
     ├── test_app_shell.py   Streamlit AppTest: boot, locking, staleness end-to-end
@@ -121,7 +143,8 @@ Items marked ⚠ in the docs are inferred (the design doc is silent) and need a 
 2. **EDA gating** — assumed to require a cleaned dataset only (chain shows it after Preprocessing).
 3. **Split defaults** — assumed 80% holdout / 5-fold CV; doc specifies strategies but not ratios.
 4. **MVP model list** — CatBoost included or deferred? Multilabel classification in MVP?
-5. **Data hash method** — sha256 of Parquet bytes (pinned writer settings) vs content digest.
+5. ~~**Data hash method**~~ — resolved in Phase 2: sha256 of Parquet bytes (pinned writer settings)
+   via `hash_file` in `services/workspace.py`; the schema sidecar carries the report.
 6. **Dataframe default** — pandas at the service boundary for MVP; Polars/DuckDB when >1M rows.
 
 ## Development

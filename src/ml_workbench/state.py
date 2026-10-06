@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from ml_workbench.tabs import TAB_ORDER
+
+if TYPE_CHECKING:
+    from pandas import DataFrame
 
 LearningType = str
 TaskType = str
 ModelStatus = str
+
+
+class TaskError(ValueError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -26,6 +34,25 @@ class TaskDefinition:
     group: str | None = None
     time_column: str | None = None
     eval_labels: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.learning_type == "unsupervised":
+            if self.target is not None:
+                raise TaskError("unsupervised tasks must not set a target column")
+            if self.task_type in {
+                "binary",
+                "multiclass",
+                "multilabel",
+                "regression",
+                "forecasting",
+            }:
+                raise TaskError(f"'{self.task_type}' is a supervised task type")
+        if self.learning_type == "supervised" and self.target is None:
+            raise TaskError("supervised tasks require a target column")
+        if self.task_type == "forecasting" and self.time_column is None:
+            raise TaskError("forecasting requires a time column")
+        if self.eval_labels is not None and self.eval_labels == self.target:
+            raise TaskError("evaluation labels must differ from the target")
 
 
 @dataclass(frozen=True)
@@ -68,6 +95,7 @@ class ProjectState:
     project_id: str
     seed: int = 42
     dataset: DatasetInfo | None = None
+    frame: DataFrame | None = None
     task: TaskDefinition | None = None
     split: SplitInfo | None = None
     pipeline: PipelineInfo | None = None
@@ -94,3 +122,8 @@ class ProjectState:
     @property
     def has_trained_model(self) -> bool:
         return bool(self.trained_models)
+
+
+def feature_columns(task: TaskDefinition, frame: DataFrame) -> list[str]:
+    excluded = {col for col in (task.target, task.eval_labels, task.group) if col is not None}
+    return [col for col in frame.columns if col not in excluded]
