@@ -20,12 +20,15 @@ Design source: *ML Workbench: Software Documentation v1.0 — Architecture and t
 
 | Phase | State |
 |---|---|
-| Phase 0 — Design & contracts (no code) | **complete — awaiting review** |
-| Phase 1 — Foundation (scaffolding) | not started |
-| Phases 2–9 — Implementation | not started |
+| Phase 0 — Design & contracts (no code) | **complete** |
+| Phase 1 — Foundation (scaffolding) | **complete — exit criteria met** |
+| Phase 2 — Walking skeleton | next |
+| Phases 3–9 — Implementation | not started |
 
-No application code exists yet. Everything currently in the repo (`README.md`, `docs/`, `registry/`)
-is the Phase 0 deliverable: the spec the implementation will be built and tested against.
+Current state: `docs/` and `registry/` hold the Phase 0 spec (124 rules, tab matrix, contracts);
+`src/` and `tests/` hold the Phase 1 foundation (project state, rules engine for gating/staleness,
+registry loader, Streamlit shell) — all checks green (ruff, mypy strict, 32 passing tests, 116
+wired as pending for later phases).
 
 ## MVP scope (delivered in Phases 2–5)
 
@@ -48,17 +51,19 @@ is the Phase 0 deliverable: the spec the implementation will be built and tested
 - [x] Rules catalog: every rule from the design doc given an ID, a given/when/then statement, and a reserved pytest name → [`docs/rules.md`](docs/rules.md)
 - [x] Tab acceptance criteria and gating matrix → [`docs/tabs.md`](docs/tabs.md)
 
-**Exit criteria:** reviewed spec; every rule has an ID and a named test case. → *awaiting your review*
+**Exit criteria:** reviewed spec; every rule has an ID and a named test case. → *met (approved to proceed)*
 
-#### Phase 1 — Foundation (scaffolding only)
+#### Phase 1 — Foundation (scaffolding only) ✅
 
-- [ ] Repo layout mirroring the service layer; pinned dependencies (`pyproject.toml`)
-- [ ] ruff + mypy + pytest configured; CI pipeline
-- [ ] Sample datasets checked in for tests and demos
-- [ ] App shell: 10 tab stubs, navigation, working gating driven by `docs/rules.md`
-- [ ] Rules-engine skeleton with the Phase 0 test names wired up
+- [x] Repo layout mirroring the service layer; pinned dependencies (`pyproject.toml`)
+- [x] ruff + mypy + pytest configured; CI pipeline (`.github/workflows/ci.yml`)
+- [x] Sample datasets checked in for tests and demos (`data/samples/`, regenerable via `scripts/make_sample_data.py`)
+- [x] App shell: 10 tab stubs, navigation, working gating driven by `docs/rules.md`
+- [x] Rules-engine skeleton with the Phase 0 test names wired up (124 tests: 8 real for GATE/STALE,
+  116 pending stubs kept in sync by `scripts/scaffold_rule_tests.py --check`)
 
-**Exit criteria:** `streamlit run` boots, gated tabs behave correctly, CI green.
+**Exit criteria:** `streamlit run` boots, gated tabs behave correctly, CI green. → *met locally;
+CI runs on first push*
 
 ### Implementation
 
@@ -78,6 +83,8 @@ is the Phase 0 deliverable: the spec the implementation will be built and tested
 ```
 ml_workbench/
 ├── README.md               this file: overview + phase plan
+├── pyproject.toml          pinned dependencies, ruff/mypy/pytest config
+├── .github/workflows/ci.yml  CI: ruff, mypy, rule sync check, pytest
 ├── docs/
 │   ├── architecture.md     ADRs, layer diagram, storage layout, performance, security
 │   ├── contracts.md        project state, step log, run metadata, data hash, staleness
@@ -86,8 +93,24 @@ ml_workbench/
 │   └── tabs.md             per-tab inputs/outputs/acceptance criteria + gating matrix
 ├── registry/
 │   └── models.yaml         model registry data: capability flags + hyperparameter schemas
-├── src/                    application code (created in Phase 1)
-└── tests/                  pytest suites (created in Phase 1)
+├── data/samples/           deterministic sample CSVs for tests and demos
+├── scripts/
+│   ├── make_sample_data.py regenerate sample datasets
+│   └── scaffold_rule_tests.py  generate/sync rule stub tests from docs/rules.md (--check in CI)
+├── src/ml_workbench/
+│   ├── tabs.py             tab metadata (id, order, design section, phase)
+│   ├── state.py            ProjectState and related dataclasses (docs/contracts.md)
+│   ├── registry.py         registry loader + validation + task/phase filtering
+│   ├── rules/              gating (GATE-*) and staleness (STALE-*) — pure functions
+│   ├── services/           service layer (populated from Phase 2)
+│   └── app.py              Streamlit shell: navigation, gating, staleness, scaffold simulators
+└── tests/
+    ├── rules/              one file per rules.md section (124 rule tests)
+    ├── test_app_shell.py   Streamlit AppTest: boot, locking, staleness end-to-end
+    ├── test_rule_coverage.py  docs ↔ tests ↔ engine consistency
+    ├── test_registry.py    registry schema and filtering
+    ├── test_tabs.py        tab metadata ↔ docs/contracts.md
+    └── test_samples.py     sample dataset integrity
 ```
 
 ## Open questions for review
@@ -103,4 +126,14 @@ Items marked ⚠ in the docs are inferred (the design doc is silent) and need a 
 
 ## Development
 
-Commands (install, lint, typecheck, test) are added in Phase 1.
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+
+streamlit run src/ml_workbench/app.py   # run the app shell
+pytest                                   # all tests (rule stubs show as pending)
+ruff check . && ruff format --check .    # lint + format
+mypy                                     # strict type check (src/)
+python scripts/scaffold_rule_tests.py --check   # verify docs/rules.md ↔ tests sync
+python scripts/make_sample_data.py       # regenerate sample datasets
+```

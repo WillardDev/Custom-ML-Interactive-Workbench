@@ -15,16 +15,16 @@ Legend: **R** = editable/required, **view** = readable, **—** = not yet availa
 
 | # | Tab | Project loaded | Task set | Cleaned data | Split/pipeline | ≥1 trained model |
 |---|---|---|---|---|---|---|
-| 1 | Data Insertion | — (upload) | R | — | — | — |
-| 2 | Cleaning | R | R | — | — | — |
-| 3 | Preprocessing | R | R | R | — | — |
-| 4 | EDA | R | R | R † | view † | — |
+| 1 | Data Insertion | — (upload) | — (sets task) | — | — | — |
+| 2 | Data Cleaning | R | R | — | — | — |
+| 3 | Data Preprocessing | R | R | R | — | — |
+| 4 | Exploratory Data Analysis | R | R | R † | view † | — |
 | 5 | Modelling | R | R | R | view | view (compare) |
-| 6 | Training | R | R | R | **R (GATE-01)** | R |
+| 6 | Training | R | R | R | **R (GATE-01)** | — (creates) |
 | 7 | Prediction | R | R | R | R | **R (GATE-02)** |
 | 8 | Error Analysis | R | R | R | R | **R (GATE-02)** |
-| 9 | Explainability | R | R | R | R | **R (GATE-02)** |
-| 10 | Outcome | R | R | R | R | **R (GATE-04 ⚠)** |
+| 9 | Model Explainability | R | R | R | R | **R (GATE-02)** |
+| 10 | Outcome and Final Prediction | R | R | R | R | **R (GATE-04 ⚠)** |
 
 ---
 
@@ -164,7 +164,10 @@ Legend: **R** = editable/required, **view** = readable, **—** = not yet availa
 
 ## Navigation and UI expectations (§3)
 
-- Sidebar (or top nav) lists the 10 tabs in order; locked tabs visible but disabled with a tooltip
-  stating which rule locked them.
-- Stale tabs show a distinct marker + banner (`STALE-02`).
+- Sidebar (or top nav) lists the 10 tabs in order; navigation labels are pure (number + title) so
+  they never depend on mutable state.
+- Lock and stale markers are listed in a "Tab status" block directly under the navigation;
+  selecting a locked tab shows a lock panel stating which rule locked it and which requirements
+  are missing (`GATE-*`).
+- A stale tab shows a banner with what went stale and offers re-run (`STALE-02`).
 - Only the active tab performs work (§8); background-job progress is visible app-wide.

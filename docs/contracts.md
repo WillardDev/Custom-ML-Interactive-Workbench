@@ -21,8 +21,18 @@ Tabs have stable IDs and a fixed order; order defines downstream direction for s
 | 10 | `outcome` | Outcome and Final Prediction |
 
 ```python
-TAB_ORDER = ["data", "cleaning", "preprocessing", "eda", "modelling",
-             "training", "prediction", "error_analysis", "explainability", "outcome"]
+TAB_ORDER = [
+    "data",
+    "cleaning",
+    "preprocessing",
+    "eda",
+    "modelling",
+    "training",
+    "prediction",
+    "error_analysis",
+    "explainability",
+    "outcome",
+]
 ```
 
 ## ProjectState (lives in `st.session_state["state"]`)
