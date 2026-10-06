@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import importlib.util
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-CURRENT_PHASE: int = 1
+CURRENT_PHASE: int = 4
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_REGISTRY_PATH = REPO_ROOT / "registry" / "models.yaml"
@@ -74,6 +75,25 @@ def enabled_models(
         if spec.enabled_phase <= phase and (task is None or task in spec.tasks)
     ]
     return sorted(selected, key=lambda spec: (spec.enabled_phase, spec.id))
+
+
+def library_available(library: str) -> bool:
+    """True when the model's top-level library can be imported (e.g. xgboost, torch)."""
+    package = library.split(".")[0]
+    return importlib.util.find_spec(package) is not None
+
+
+def available_models(
+    models: dict[str, ModelSpec],
+    task: str | None = None,
+    phase: int = CURRENT_PHASE,
+) -> list[ModelSpec]:
+    """MODEL-01: enabled-by-phase models whose runtime library is actually importable."""
+    return [
+        spec
+        for spec in enabled_models(models, task=task, phase=phase)
+        if library_available(spec.library)
+    ]
 
 
 def _parse_entry(entry: Any, path: Path) -> ModelSpec:

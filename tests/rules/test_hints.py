@@ -2,14 +2,17 @@
 from __future__ import annotations
 
 import pandas as pd
-import pytest
 
 from ml_workbench.rules.eda import skew_hint
+from ml_workbench.rules.modelling import small_data_hint
 
 
-@pytest.mark.skip(reason="pending implementation: docs/rules.md HINT-01")
 def test_hint_boosting_baseline_small_data() -> None:
-    raise NotImplementedError("docs/rules.md HINT-01")
+    hint = small_data_hint(5_000)
+    assert hint is not None
+    assert "boosting" in hint.lower()
+
+    assert small_data_hint(1_000_000) is None
 
 
 def test_hint_log_transform_skewed_target() -> None:

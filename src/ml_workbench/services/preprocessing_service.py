@@ -55,7 +55,7 @@ class SplitResult:
 
 @dataclass(frozen=True)
 class PipelineReport:
-    pipeline: object
+    pipeline: Any
     numeric_columns: tuple[str, ...]
     categorical_columns: tuple[str, ...]
     encoder: str

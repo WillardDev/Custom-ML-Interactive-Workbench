@@ -1,0 +1,90 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from ml_workbench.rules.modelling import MINORITY_FRACTION_THRESHOLD
+from ml_workbench.rules.preprocessing import SKEW_THRESHOLD
+
+CLASSIFICATION_TASK_TYPES = frozenset({"binary", "multiclass", "multilabel"})
+
+DEFAULT_METRICS: tuple[str, ...] = ("accuracy", "f1")
+
+
+@dataclass(frozen=True)
+class MetricPlan:
+    primary: str
+    metrics: tuple[str, ...]
+    rule_id: str
+    note: str
+
+
+def metric_plan(
+    task_type: str,
+    *,
+    minority_fraction: float | None = None,
+    target_skew: float = 0.0,
+) -> MetricPlan:
+    """METRIC-01..08: scoreboard for the task (supervised classification/regression wired now)."""
+    if task_type in CLASSIFICATION_TASK_TYPES:
+        if minority_fraction is not None and minority_fraction < MINORITY_FRACTION_THRESHOLD:
+            return MetricPlan(
+                primary="pr_auc",
+                metrics=("pr_auc", "macro_f1", "mcc", "balanced_accuracy"),
+                rule_id="METRIC-02",
+                note="imbalanced classification (minority < 20%): PR-AUC primary, "
+                "macro-F1, MCC, balanced accuracy.",
+            )
+        return MetricPlan(
+            primary="accuracy",
+            metrics=("accuracy", "f1"),
+            rule_id="METRIC-01",
+            note="balanced classification: accuracy and F1.",
+        )
+    if task_type == "regression":
+        if abs(target_skew) > SKEW_THRESHOLD:
+            return MetricPlan(
+                primary="mae",
+                metrics=("mae", "rmse", "r2"),
+                rule_id="METRIC-03",
+                note="skewed/outlier-heavy target: primary metric is MAE (robust to skew).",
+            )
+        return MetricPlan(
+            primary="rmse",
+            metrics=("rmse", "mae", "r2"),
+            rule_id="METRIC-03",
+            note="regression: RMSE primary, MAE and R2 reported.",
+        )
+    if task_type == "forecasting":
+        return MetricPlan(
+            primary="mae",
+            metrics=("mae", "rmse", "mase"),
+            rule_id="METRIC-04",
+            note="time series: MAE, RMSE, MASE.",
+        )
+    if task_type == "clustering":
+        return MetricPlan(
+            primary="silhouette",
+            metrics=("silhouette", "davies_bouldin", "calinski_harabasz"),
+            rule_id="METRIC-05",
+            note="clustering: silhouette, Davies-Bouldin, Calinski-Harabasz.",
+        )
+    if task_type == "dimensionality_reduction":
+        return MetricPlan(
+            primary="explained_variance",
+            metrics=("explained_variance", "reconstruction_error"),
+            rule_id="METRIC-06",
+            note="dimensionality reduction: explained variance and reconstruction error.",
+        )
+    if task_type == "anomaly_detection":
+        return MetricPlan(
+            primary="score_distribution",
+            metrics=("score_distribution",),
+            rule_id="METRIC-07",
+            note="anomaly detection: score distribution (ROC/PR-AUC when labeled).",
+        )
+    return MetricPlan(
+        primary="lift",
+        metrics=("support", "confidence", "lift"),
+        rule_id="METRIC-08",
+        note="association rules: support, confidence, lift filters.",
+    )

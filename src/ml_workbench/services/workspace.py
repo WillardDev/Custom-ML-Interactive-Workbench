@@ -15,6 +15,7 @@ import pyarrow  # noqa: F401  (imported for the writer version string)
 from ml_workbench.state import StepEntry
 
 VERSION_RE: Final = re.compile(r"^v\d{5}$")
+RUN_ID_RE: Final = re.compile(r"^run_[A-Za-z0-9]{8}$")
 PROJECT_ID_RE: Final = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 STEPS_LOG_VERSION: Final = 1
 PARQUET_COMPRESSION: Final = "snappy"
@@ -209,3 +210,23 @@ class Workspace:
         popped = entries.pop(index)
         self.write_steps(entries)
         return popped
+
+    def run_dir(self, run_id: str) -> Path:
+        if not RUN_ID_RE.match(run_id):
+            raise WorkspaceError(f"invalid run id '{run_id}'")
+        return self.models_dir / run_id
+
+    def write_run_json(self, run_id: str, name: str, payload: dict[str, object]) -> Path:
+        path = self.run_dir(run_id) / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        return path
+
+    def read_run_json(self, run_id: str, name: str) -> dict[str, Any]:
+        path = self.run_dir(run_id) / name
+        if not path.is_file():
+            raise WorkspaceError(f"'{name}' for run '{run_id}' not found")
+        payload = json.loads(path.read_text())
+        if not isinstance(payload, dict):
+            raise WorkspaceError(f"'{name}' for run '{run_id}' is not a JSON object")
+        return payload

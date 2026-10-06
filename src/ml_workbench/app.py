@@ -14,7 +14,10 @@ from ml_workbench.ui import (
     render_cleaning_tab,
     render_data_tab,
     render_eda_tab,
+    render_modelling_tab,
+    render_prediction_tab,
     render_preprocessing_tab,
+    render_training_tab,
 )
 
 DEFAULT_WORKSPACE_ROOT = Path(__file__).resolve().parents[2] / "workspace"
@@ -24,6 +27,9 @@ RENDERERS: dict[str, Callable[[ProjectState, Workspace], None]] = {
     "cleaning": render_cleaning_tab,
     "preprocessing": render_preprocessing_tab,
     "eda": render_eda_tab,
+    "modelling": render_modelling_tab,
+    "training": render_training_tab,
+    "prediction": render_prediction_tab,
 }
 
 
@@ -107,7 +113,7 @@ def _render_tab(state: ProjectState, workspace: Workspace, tab_id: str) -> None:
 def main() -> None:
     st.set_page_config(page_title="ML Workbench", layout="wide")
     st.sidebar.title("ML Workbench")
-    st.sidebar.caption("Phase 3: Preprocessing and EDA are live")
+    st.sidebar.caption("Phase 4: Modelling, Training and Prediction are live")
 
     state = _state()
     workspace = _workspace(state)

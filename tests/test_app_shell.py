@@ -152,3 +152,45 @@ def test_preprocessing_build_unlocks_training_and_eda(app: AppTest) -> None:
     assert not app.exception
     assert app.header[0].value == "6. Training"
     assert not any("Locked:" in item.value for item in app.info)
+
+
+def test_phase4_train_and_predict_end_to_end(app: AppTest) -> None:
+    app.run()
+    _load_sample(app)
+    _set_task(app)
+    _clean(app)
+
+    app.sidebar.radio("workflow_nav").set_value("preprocessing").run()
+    app.button("prep_build").click().run()
+    assert not app.exception
+
+    app.sidebar.radio("workflow_nav").set_value("modelling").run()
+    assert not app.exception
+    assert app.header[0].value == "5. Modelling"
+    assert any("Model registry" in item.value for item in app.subheader)
+
+    app.button("mod_queue_all").click().run()
+    assert not app.exception
+    state: ProjectState = app.session_state["state"]
+    queued = [model for model in state.models if model.status == "queued"]
+    assert queued, "modelling tab queues at least one job"
+    assert app.session_state["training_queue"]
+
+    app.sidebar.radio("workflow_nav").set_value("training").run()
+    assert app.header[0].value == "6. Training"
+    app.button("train_run").click().run()
+    assert not app.exception
+    state = app.session_state["state"]
+    done = state.trained_models
+    assert done and not app.session_state["training_queue"]
+    assert state.active_model_id == done[-1].run_id
+    assert any(step.tab == "training" for step in state.steps)
+
+    app.sidebar.radio("workflow_nav").set_value("prediction").run()
+    assert not app.exception
+    assert app.header[0].value == "7. Prediction"
+    assert app.selectbox("pred_model").value == done[-1].run_id
+    assert app.button("pred_single")
+    app.button("pred_single").click().run()
+    assert not app.exception
+    assert app.json, "single-row prediction renders a JSON payload"

@@ -105,8 +105,8 @@ dataset hash before/after so undo and staleness are verifiable.
 ```
 
 - `op` vocabulary: `load`, `dedupe`, `fix_dtypes`, `drop_rows`, `impute`, `outlier_treatment`,
-  `encode`, `scale`, `feature_select`, `split`, `target_transform`, `resample` (Phase 6),
-  `window` (Phase 8).
+  `encode`, `scale`, `feature_select`, `split`, `target_transform`, `train`, `tune` (Phase 4),
+  `resample` (Phase 6), `window` (Phase 8).
 - Steps written by Phase 2 (data + cleaning) also record `params.version_before` and
   `params.version_after`; undo restores the Parquet of `version_before` and removes that entry.
   Only `tab == "cleaning"` entries are undoable — a `load` entry is the start of the log.
@@ -151,38 +151,79 @@ Phase 3.
 
 ## Model run metadata — `models/<run_id>/meta.json` (§6.6, §6.10)
 
+Run ids are `run_` + 8 alphanumerics (`RUN_ID_RE`); directories live under
+`workspace/projects/<project_id>/models/<run_id>/`.
+
 ```json
 {
-  "run_id": "r_0007",
-  "model_id": "lightgbm",
+  "run_id": "run_4f8Kz2Mp",
+  "model_id": "logistic_regression",
   "task": {"learning_type": "supervised", "task_type": "binary"},
-  "params": {"learning_rate": 0.05, "n_estimators": 500},
+  "params": {"C": 1.0, "penalty": "l2", "solver": "lbfgs"},
   "seed": 42,
   "data_hash": "sha256:c41d...",
   "split": {"strategy": "stratified_kfold", "params": {"n_splits": 5}},
-  "versions": {"python": "3.12.x", "scikit_learn": "1.5.x", "...": "..."},
+  "library_versions": {"sklearn": "1.5.x"},
+  "primary": "accuracy",
+  "rule_id": "METRIC-01",
+  "mode": "manual",
   "trained_at": "2026-10-06T11:03:52Z"
 }
 ```
 
-This is also the **metadata sidecar** read by tabs that do not need the heavy artifact (§8):
-leaderboard, gating checks, and registry views read `meta.json` only.
+This is the **metadata sidecar** read by tabs that do not need the heavy artifact (§8):
+leaderboard and gating checks read `meta.json` / `metrics.json` only — never the fitted pipeline
+(rule `PERF-01`).
 
 ## Metrics — `models/<run_id>/metrics.json` (§6.6)
 
 ```json
 {
-  "primary": "pr_auc",
-  "metrics": {"pr_auc": 0.81, "macro_f1": 0.77, "mcc": 0.64, "balanced_accuracy": 0.74},
-  "cv": {"n_splits": 5, "fold_values": {"pr_auc": [0.79, 0.83, "..."]},
-         "mean": {"pr_auc": 0.81}, "std": {"pr_auc": 0.02}},
-  "train_vs_val": {"train": {"pr_auc": 0.91}, "val": {"pr_auc": 0.81}},
-  "curves": {"loss": "...", "calibration": "..."}
+  "model_id": "logistic_regression",
+  "task_type": "binary",
+  "primary": "accuracy",
+  "rule_id": "METRIC-01",
+  "mean": 0.81,
+  "std": 0.02,
+  "train_metric": 0.91,
+  "val_metric": 0.81,
+  "gap": 0.1,
+  "params": {"C": 1.0, "penalty": "l2", "solver": "lbfgs"},
+  "folds": [
+    {"fold": 0, "accuracy": 0.79, "f1": 0.76, "training_metric": 0.91},
+    {"fold": 1, "accuracy": 0.83, "f1": 0.78, "training_metric": 0.90}
+  ],
+  "metrics": ["accuracy", "f1"],
+  "data_hash": "sha256:c41d..."
 }
 ```
 
-- Which metrics appear is decided by rules `METRIC-01`…`METRIC-08`.
-- Unsupervised runs may have no holdout; `cv` present only when CV ran (rule `TRAIN-05`).
+- Which metrics appear is decided by rules `METRIC-01`…`METRIC-08`; `primary` is the single
+  headline metric (accuracy / pr_auc for classification, rmse / mae for regression, …).
+- `mean`/`std` are across folds (CV rule `TRAIN-05`); `gap = train_metric - val_metric` signals
+  overfit. The leaderboard (`leaderboard()`) renders rows purely from these sidecars.
+- `folds` is the per-fold list consumed by the Training tab's per-fold table.
+
+## Phase 4 training artifact set (§6.6, `TRAIN-06`)
+
+`training_service.train_model` writes exactly three files to `models/<run_id>/`, plus a fourth
+only for regression with a target transform:
+
+1. `pipeline.joblib` — the final artifact: a fitted `Pipeline([("preprocess", ColumnTransformer),
+   ("model", estimator)])` fit on the official holdout **train** rows of `split.json`. When a
+   regression `target_transform` is active the estimator is fit on the transformed target.
+2. `meta.json`, 3. `metrics.json` — the sidecars above.
+4. `target_transform.joblib` (regression + target transform only) — the fitted transform; the
+   Prediction service applies `inverse_transform` to bring predictions back to the original scale.
+
+Training is wrapped by CV: per-fold leak-safe preprocessing is rebuilt on the fold's training rows
+only, then the final artifact is re-fit on the full train split. `state.models` entries move from
+`status="queued"` to `"done"` (a queued run id is reused by `train_model(run_id=...)`); each run
+appends a step-log entry `{op: "train", params: {run_id, model, primary, mean, gap, mode}}`.
+
+Model pipelines are loaded lazily through a bounded LRU cache (`ModelCache`, capacity 2,
+rule `PERF-02`): `get_pipeline(workspace, run_id, cache=...)` tracks hit/miss counters and records
+evicted keys, so Prediction never re-disk-loads the active model on every interaction.
 
 ## Dataset versions and data hash (§6.1, §9)
 
@@ -215,7 +256,10 @@ leaderboard, gating checks, and registry views read `meta.json` only.
 | Schema report sidecar | JSON (`datasets/vNNNNN.schema.json`) | with every dataset version |
 | Split indices | JSON (`preprocessing/split.json`) | preprocessing run |
 | Fitted preprocessing pipeline | joblib (`preprocessing/pipeline.joblib`) | preprocessing run |
-| Model | joblib / framework checkpoint | Phase 4 |
+| Fitted model pipeline | joblib (`models/<run_id>/pipeline.joblib`) | Phase 4 (`TRAIN-06`) |
+| Model metadata sidecar | JSON (`models/<run_id>/meta.json`) | Phase 4 (`TRAIN-01`) |
+| Model metrics sidecar | JSON (`models/<run_id>/metrics.json`) | Phase 4 (`PERF-01`) |
+| Target transform | joblib (`models/<run_id>/target_transform.joblib`) | Phase 4 regression + target transform |
 | Portable inference | ONNX | Phase 5 |
 | Predictions | Parquet/CSV | Phase 5 |
 | Reports | HTML, PDF | Phase 5 |

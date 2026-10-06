@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import numpy as np
+import pandas as pd
 import pytest
 
 from ml_workbench.state import (
@@ -35,3 +37,59 @@ def ready_state() -> ProjectState:
     state.models = [ModelRun(run_id="r_001", model_id="logistic_regression", status="done")]
     state.active_model_id = "logistic_regression"
     return state
+
+
+@pytest.fixture
+def binary_frame() -> pd.DataFrame:
+    rng = np.random.default_rng(0)
+    return pd.DataFrame(
+        {
+            "units": rng.integers(1, 9, size=60).astype(float),
+            "band": rng.choice(["a", "b", "c"], size=60),
+            "score": rng.normal(0, 1, size=60),
+            "target": rng.integers(0, 2, size=60).astype(int),
+        }
+    )
+
+
+@pytest.fixture
+def prepared_workspace(tmp_path):
+    """Factory: a cleaned + preprocessed (train/test split) project ready for Phase 4."""
+
+    def make(
+        frame: pd.DataFrame,
+        *,
+        target: str = "target",
+        task_type: str = "binary",
+        options=None,
+    ):
+        from ml_workbench.rules.task import build_task
+        from ml_workbench.services.data_service import insert_dataset
+        from ml_workbench.services.preprocessing_service import (
+            PreprocessingOptions,
+            run_preprocessing,
+        )
+        from ml_workbench.services.workspace import Workspace, utc_now
+
+        ws = Workspace(project_id="p_svc", root=tmp_path)
+        state = ProjectState(project_id="p_svc")
+        state.frame = frame
+        state.dataset = insert_dataset(state, ws, frame, source="test")
+        ws.write_steps(
+            [
+                StepEntry(
+                    id=1,
+                    tab="cleaning",
+                    op="dedupe",
+                    dataset_hash_before=state.dataset.data_hash,
+                    dataset_hash_after=state.dataset.data_hash,
+                    created_at=utc_now(),
+                )
+            ]
+        )
+        state.steps = ws.read_steps()
+        state.task = build_task(frame, "supervised", target=target, task_type=task_type)
+        run_preprocessing(state, ws, options or PreprocessingOptions())
+        return state, ws
+
+    return make

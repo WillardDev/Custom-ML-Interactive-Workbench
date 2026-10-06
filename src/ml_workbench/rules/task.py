@@ -16,6 +16,17 @@ UNSUPERVISED_TASK_TYPES: Final[frozenset[str]] = frozenset(
     {"clustering", "dimensionality_reduction", "anomaly_detection", "association"}
 )
 
+TASK_FAMILY: Final[dict[str, str]] = {
+    "binary": "classification",
+    "multiclass": "classification",
+    "multilabel": "classification",
+}
+
+
+def registry_task_type(task_type: str) -> str:
+    """Map a TaskDefinition.task_type to the registry's coarse task family."""
+    return TASK_FAMILY.get(task_type, task_type)
+
 
 def suggest_task_type(series: pd.Series) -> str:
     """TASK-01: infer a supervised task type from the target column."""

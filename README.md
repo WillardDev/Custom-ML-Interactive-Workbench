@@ -24,16 +24,18 @@ Design source: *ML Workbench: Software Documentation v1.0 — Architecture and t
 | Phase 1 — Foundation (scaffolding) | **complete — exit criteria met** |
 | Phase 2 — Walking skeleton | **complete — exit criteria met** |
 | Phase 3 — Preprocessing + EDA | **complete — exit criteria met** |
-| Phases 4–9 — Implementation | not started |
+| Phase 4 — Modelling, Training, Prediction | **complete — exit criteria met** |
+| Phases 5–9 — Implementation | not started |
 
 Current state: `docs/` and `registry/` hold the Phase 0 spec (124 rules, tab matrix, contracts);
 `src/` holds the foundation (project state, rules engine for gating/staleness, registry loader,
-Streamlit shell). Phases 2–3 are live: Data Insertion, Data Cleaning, Data Preprocessing, and EDA
-tabs with versioned Parquet storage, schema reports, the step log with undo, task inference
-(TASK-01..03), cleaning rules (CLEAN-01..06), and leakage-safe split/encode/scale preprocessing
-(SPLIT-01..09, ENC-*, SCALE-*, FEAT-*, DR-*, TT-01, PIPE-01) plus task-adaptive EDA (EDA-01..03,
-EDA-09, HINT-02) — all checks green (ruff, mypy strict, 110 passing tests, 70 rule tests still
-pending for later phases).
+Streamlit shell). Phases 2–4 are live: Data Insertion, Data Cleaning, Data Preprocessing, EDA,
+Modelling, Training, and Prediction tabs with versioned Parquet storage, schema reports, the step
+log with undo, task inference (TASK-01..03), cleaning rules (CLEAN-01..06), leakage-safe
+split/encode/scale preprocessing (SPLIT-01..09, ENC-*, SCALE-*, FEAT-*, DR-*, TT-01, PIPE-01),
+task-adaptive EDA (EDA-01..03, EDA-09, HINT-02), and the Phase 4 modelling/training/prediction
+stack (MODEL-01..04, HINT-01, TRAIN-01..07, METRIC-01..03, PRED-01..05, PERF-01..02, WARN-01..07) —
+all checks green (ruff, mypy strict, rule-test sync, pytest).
 
 ## MVP scope (delivered in Phases 2–5)
 
@@ -112,13 +114,52 @@ the real flow (load sample → set task → clean → tabs unlock / stale on re-
 **Exit criteria:** leakage-safety tests pass; EDA adapts to task. → *met: `test_run_preprocessing_builds_leak_safe_pipeline`
 proves the scaler statistic equals the train-fold value; `eda_report` returns task-specific views.*
 
+#### Phase 4 — Modelling, Training, Prediction ✅
+
+- [x] Model registry gated by **phase budget and installed libraries**: `enabled_models(task, phase)`
+      filters `enabled_phase <= CURRENT_PHASE`, `available_models` also requires the model's library to be
+      importable (sklearn present; xgboost/lightgbm/catboost/mlp filtered out) (MODEL-01)
+- [x] Modelling rules: hyperparameter forms generated from the registry schema with
+      `visible_when` flag/task conditions (MODEL-02), capability/condition prompts (MODEL-03),
+      off-schema option rejection (MODEL-04), small-data boosting hint (HINT-01)
+      (`src/ml_workbench/rules/modelling.py`)
+- [x] Metric plans by task + data shape: balanced binary → accuracy/F1 (METRIC-01), imbalanced →
+      PR-AUC/macro-F1/MCC/balanced-accuracy (METRIC-02), regression → RMSE or MAE by target skew
+      (METRIC-03) (`src/ml_workbench/rules/metrics.py`)
+- [x] Training rules: log fields with seed + data hash (TRAIN-01), boosting early stopping (TRAIN-02),
+      pruned random-search tuning (TRAIN-04), CV leaderboard stats mean/std/gap (TRAIN-05),
+      artifact sidecars (TRAIN-06), CPU/GPU job routing (TRAIN-07)
+      (`src/ml_workbench/rules/training.py`)
+- [x] Prediction rules: adjustable decision threshold + calibration for binary (PRED-01/02),
+      surrogate requirement for non-predicting models (PRED-04/05)
+      (`src/ml_workbench/rules/prediction.py`)
+- [x] Performance rules: leaderboard reads sidecars only (PERF-01), bounding LRU model cache (PERF-02)
+      (`src/ml_workbench/rules/performance.py`)
+- [x] Training service: 7 sklearn estimators, per-fold leak-safe CV, final artifact fitted on the
+      holdout train, `tune_hyperparameters` with reduced-budget probes + pruning, regression target
+      transform saved alongside the pipeline (`src/ml_workbench/services/training_service.py`,
+      `services/model_cache.py`)
+- [x] Prediction service: lazy pipeline load through the cache, single-row / batch / test-set
+      prediction, threshold + calibration evaluation (`src/ml_workbench/services/prediction_service.py`)
+- [x] Modelling / Training / Prediction tabs wired into `app.py`: model forms, job queue
+      (`st.session_state["training_queue"]`), leaderboard with per-fold details, prediction UI
+      (`src/ml_workbench/ui/modelling_tab.py`, `ui/training_tab.py`, `ui/prediction_tab.py`)
+- [x] Rule tests implemented (MODEL-01..04, HINT-01, TRAIN-01..07, METRIC-01..03, PRED-01..05,
+      PERF-01..04, WARN-01..07) + service tests (artifacts/sidecars, LRU eviction, threshold/calibration)
+      + an AppTest driving modelling → queue → training → prediction
+
+**Exit criteria:** train → leaderboard → predict end-to-end on tabular classification and regression;
+LRU lazy-load works. → *met: `test_phase4_train_and_predict_end_to_end` queues a job in the Modelling tab,
+trains it in the Training tab, and predicts in the Prediction tab; `test_get_pipeline_uses_lru_cache_and_evicts`
+proves capacity-2 eviction.*
+
 ### Implementation
 
 | # | Phase | Status | Content | Exit criteria |
 |---|---|---|---|---|
 | 2 | Walking skeleton | ✅ | Project state manager, Data Insertion (schema report, hashing), Cleaning decision tree, step log + undo | Data → versioned cleaned Parquet; stale flags propagate |
 | 3 | Preprocessing + EDA | ✅ | Split/encoding/scaling rules from registry, leakage-safe pipeline build, task-adaptive EDA views | Leakage-safety tests pass; EDA adapts to task |
-| 4 | Modelling, Training, Prediction | next | Registry filtering, hyperparameter forms, CV/tuning, leaderboard, artifacts + metadata sidecars, prediction tab | Train → leaderboard → predict on tabular cls/reg; LRU lazy-load works |
+| 4 | Modelling, Training, Prediction | ✅ | Registry filtering, hyperparameter forms, CV/tuning, leaderboard, artifacts + metadata sidecars, prediction tab | Train → leaderboard → predict on tabular cls/reg; LRU lazy-load works |
 | 5 | Error Analysis, Explainability, Outcome | — | Task-specific error views, SHAP as background jobs, report + script export + model card + ONNX | **MVP complete:** full 10-tab flow on sample data with reproducible script |
 | 6 | Unsupervised | — | Clustering, PCA/UMAP, anomaly detection, surrogate explanations | Design doc Phase 2 delivered |
 | 7 | Neural networks | — | MLP/transformers, GPU routing, live loss curves, gradient-based explanations | Design doc Phase 3 delivered |
@@ -149,11 +190,16 @@ ml_workbench/
 │   ├── state.py            ProjectState and related dataclasses (docs/contracts.md)
 │   ├── registry.py         registry loader + validation + task/phase filtering
 │   ├── rules/              pure rules: gating (GATE-*), staleness (STALE-*), task (TASK-*), cleaning (CLEAN-*),
-│   │                       split (SPLIT-*), preprocessing (ENC/SCALE/FEAT/DR/TT/PIPE), eda (EDA-*, HINT-*)
+│   │                       split (SPLIT-*), preprocessing (ENC/SCALE/FEAT/DR/TT/PIPE), eda (EDA-*, HINT-*),
+│   │                       modelling (MODEL-*, HINT-01), metrics (METRIC-*), training (TRAIN-*), prediction
+│   │                       (PRED-*), warnings (WARN-*), performance (PERF-*)
 │   ├── services/           service layer: workspace (ADR-004 storage), data_service, cleaning_service,
-│   │                       preprocessing_service, eda_service
+│   │                       preprocessing_service, eda_service, training_service, prediction_service,
+│   │                       model_cache (bounded LRU)
 │   ├── ui/                 renderers: data_tab (insert + task), cleaning_tab (options + step log),
-│   │                       preprocessing_tab (split/encode/scale/build), eda_tab (views)
+│   │                       preprocessing_tab (split/encode/scale/build), eda_tab (views),
+│   │                       modelling_tab (model forms + queue), training_tab (leaderboard + runs),
+│   │                       prediction_tab (test eval + single/batch prediction)
 │   └── app.py              Streamlit shell: navigation, gating, stale banners, tab renderers
 └── tests/
     ├── rules/              one file per rules.md section (124 rule tests)
