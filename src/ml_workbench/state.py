@@ -60,6 +60,7 @@ class SplitInfo:
     strategy: str
     params: dict[str, int | float | str] = field(default_factory=dict)
     fitted: bool = False
+    indices_path: str | None = None
 
 
 @dataclass(frozen=True)

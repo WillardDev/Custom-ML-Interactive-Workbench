@@ -23,14 +23,17 @@ Design source: *ML Workbench: Software Documentation v1.0 — Architecture and t
 | Phase 0 — Design & contracts (no code) | **complete** |
 | Phase 1 — Foundation (scaffolding) | **complete — exit criteria met** |
 | Phase 2 — Walking skeleton | **complete — exit criteria met** |
-| Phases 3–9 — Implementation | not started |
+| Phase 3 — Preprocessing + EDA | **complete — exit criteria met** |
+| Phases 4–9 — Implementation | not started |
 
 Current state: `docs/` and `registry/` hold the Phase 0 spec (124 rules, tab matrix, contracts);
-`src/` holds the Phase 1 foundation (project state, rules engine for gating/staleness, registry
-loader, Streamlit shell). The Phase 2 walking skeleton is live: Data Insertion and Data Cleaning
-tabs with versioned Parquet storage, schema reports, the step log with undo, and task inference
-(TASK-01..03) plus cleaning rules (CLEAN-01..06) — all checks green (ruff, mypy strict, 59 passing
-tests, 105 rule tests still pending for later phases).
+`src/` holds the foundation (project state, rules engine for gating/staleness, registry loader,
+Streamlit shell). Phases 2–3 are live: Data Insertion, Data Cleaning, Data Preprocessing, and EDA
+tabs with versioned Parquet storage, schema reports, the step log with undo, task inference
+(TASK-01..03), cleaning rules (CLEAN-01..06), and leakage-safe split/encode/scale preprocessing
+(SPLIT-01..09, ENC-*, SCALE-*, FEAT-*, DR-*, TT-01, PIPE-01) plus task-adaptive EDA (EDA-01..03,
+EDA-09, HINT-02) — all checks green (ruff, mypy strict, 110 passing tests, 70 rule tests still
+pending for later phases).
 
 ## MVP scope (delivered in Phases 2–5)
 
@@ -86,13 +89,36 @@ CI runs on first push*
 **Exit criteria:** Data → versioned cleaned Parquet; stale flags propagate. → *met: AppTest covers
 the real flow (load sample → set task → clean → tabs unlock / stale on re-edit / undo)*
 
+#### Phase 3 — Preprocessing + EDA ✅
+
+- [x] Split decision rules: `choose_split` / `cv_strategy` / defaults (SPLIT-01..09)
+      (`src/ml_workbench/rules/split.py`)
+- [x] Preprocessing decision rules: encoding by family (ENC-01..05), scaling by `needs_scaling`
+      (SCALE-01..04), feature-selection/imbalance menus (FEAT-01..04c), PCA suggestion (DR-01..03),
+      target transforms (TT-01), leak-safety (PIPE-01) (`src/ml_workbench/rules/preprocessing.py`)
+- [x] EDA decision rules: base + task-specific view plans (EDA-01..03, EDA-08/09 stubbed), skew
+      hint (HINT-02), large-frame sampling (EDA-09) (`src/ml_workbench/rules/eda.py`)
+- [x] Preprocessing service: materializes the split, fits a leak-safe scalar/pipeline on the
+      training fold only, persists `preprocessing/split.json` + `pipeline.joblib`, appends
+      step-log ops (`split`/`encode`/`scale`/`target_transform`), re-gates Training
+      (`src/ml_workbench/services/preprocessing_service.py`, `preprocessing/` dir in workspace)
+- [x] EDA service: shape/dtypes/missing, Pearson/Spearman + Cramér's V (numpy-only), class balance
+      + chi-square, target histogram + skew hint (`src/ml_workbench/services/eda_service.py`)
+- [x] Preprocessing + EDA tabs wired into `app.py` (`src/ml_workbench/ui/preprocessing_tab.py`,
+      `src/ml_workbench/ui/eda_tab.py`)
+- [x] Rule tests implemented (SPLIT-01..09, ENC/SCALE/FEAT/DR/TT/PIPE, EDA-01..03/09, HINT-02) +
+      service/app tests (leak-safety: scaler fitted on train split only)
+
+**Exit criteria:** leakage-safety tests pass; EDA adapts to task. → *met: `test_run_preprocessing_builds_leak_safe_pipeline`
+proves the scaler statistic equals the train-fold value; `eda_report` returns task-specific views.*
+
 ### Implementation
 
 | # | Phase | Status | Content | Exit criteria |
 |---|---|---|---|---|
 | 2 | Walking skeleton | ✅ | Project state manager, Data Insertion (schema report, hashing), Cleaning decision tree, step log + undo | Data → versioned cleaned Parquet; stale flags propagate |
-| 3 | Preprocessing + EDA | next | Pipeline rules (encoding/scaling/split from registry), EDA views per task | Leakage-safety tests pass; EDA adapts to task |
-| 4 | Modelling, Training, Prediction | — | Registry filtering, hyperparameter forms, CV/tuning, leaderboard, artifacts + metadata sidecars, prediction tab | Train → leaderboard → predict on tabular cls/reg; LRU lazy-load works |
+| 3 | Preprocessing + EDA | ✅ | Split/encoding/scaling rules from registry, leakage-safe pipeline build, task-adaptive EDA views | Leakage-safety tests pass; EDA adapts to task |
+| 4 | Modelling, Training, Prediction | next | Registry filtering, hyperparameter forms, CV/tuning, leaderboard, artifacts + metadata sidecars, prediction tab | Train → leaderboard → predict on tabular cls/reg; LRU lazy-load works |
 | 5 | Error Analysis, Explainability, Outcome | — | Task-specific error views, SHAP as background jobs, report + script export + model card + ONNX | **MVP complete:** full 10-tab flow on sample data with reproducible script |
 | 6 | Unsupervised | — | Clustering, PCA/UMAP, anomaly detection, surrogate explanations | Design doc Phase 2 delivered |
 | 7 | Neural networks | — | MLP/transformers, GPU routing, live loss curves, gradient-based explanations | Design doc Phase 3 delivered |
@@ -122,9 +148,12 @@ ml_workbench/
 │   ├── tabs.py             tab metadata (id, order, design section, phase)
 │   ├── state.py            ProjectState and related dataclasses (docs/contracts.md)
 │   ├── registry.py         registry loader + validation + task/phase filtering
-│   ├── rules/              pure rules: gating (GATE-*), staleness (STALE-*), task (TASK-*), cleaning (CLEAN-*)
-│   ├── services/           service layer: workspace (ADR-004 storage), data_service, cleaning_service
-│   ├── ui/                 renderers: data_tab (insert + task), cleaning_tab (options + step log)
+│   ├── rules/              pure rules: gating (GATE-*), staleness (STALE-*), task (TASK-*), cleaning (CLEAN-*),
+│   │                       split (SPLIT-*), preprocessing (ENC/SCALE/FEAT/DR/TT/PIPE), eda (EDA-*, HINT-*)
+│   ├── services/           service layer: workspace (ADR-004 storage), data_service, cleaning_service,
+│   │                       preprocessing_service, eda_service
+│   ├── ui/                 renderers: data_tab (insert + task), cleaning_tab (options + step log),
+│   │                       preprocessing_tab (split/encode/scale/build), eda_tab (views)
 │   └── app.py              Streamlit shell: navigation, gating, stale banners, tab renderers
 └── tests/
     ├── rules/              one file per rules.md section (124 rule tests)

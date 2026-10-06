@@ -110,7 +110,44 @@ dataset hash before/after so undo and staleness are verifiable.
 - Steps written by Phase 2 (data + cleaning) also record `params.version_before` and
   `params.version_after`; undo restores the Parquet of `version_before` and removes that entry.
   Only `tab == "cleaning"` entries are undoable — a `load` entry is the start of the log.
+- Phase 3 preprocessing steps (`split`, `encode`, `scale`, `target_transform`) do **not** write a
+  new dataset version: `params.version_before == params.version_after` and
+  `dataset_hash_before == dataset_hash_after` because the data is unchanged — only a fitted
+  pipeline artifact is produced. They are not undoable (no dataset restore target).
 - Script export (rule `EXPORT-01`) replays entries in order into a standalone Python script.
+
+## Preprocessing artifacts (§6.3)
+
+Preprocessing produces three files under `workspace/projects/<project_id>/preprocessing/`, all
+written by `preprocessing_service.run_preprocessing`:
+
+1. `split.json` — the concrete holdout indices plus the rule that chose them:
+   ```json
+   {
+     "strategy": "stratified",
+     "rule_id": "SPLIT-03",
+     "test_size": 0.2,
+     "train": [1, 3, 6, 9, "..."],
+     "test": [2, 4, "..."]
+   }
+   ```
+   `strategy` is one of `grouped`, `chronological`, `eval_labels`, `none`, `stratified`, `random`
+   (`SPLIT-01`…`SPLIT-07`). Train + test partition each frame row exactly once (no split for
+   strategy `none`).
+2. `pipeline.joblib` — the fitted, leakage-safe sklearn `ColumnTransformer` pipeline
+   (`numeric` imputer + optional scaler; `categorical` one-hot or ordinal encoder with
+   `handle_unknown="ignore"` / `unknown_value=-1`). Every fitted step is inside this single
+   pipeline and is fitted on the training rows of `split.json` **only** (`PIPE-01`, `ENC-05`,
+   `SCALE-04`).
+3. `pipeline-meta.json` — human-readable summary written by the service for sidecar readers.
+   *(Optional; the step-log entries are the authoritative record.)*
+
+`ProjectState.split.indices_path` points at `split.json`; `ProjectState.pipeline.path` points at
+`pipeline.joblib`. Training becomes unlocked once both exist (`GATE-01` → `split_or_pipeline`),
+and any preprocessing re-run re-gates it.
+
+EDA reports (review 6.4) are computed on the fly from the in-memory frame; no persisted artifact in
+Phase 3.
 
 ## Model run metadata — `models/<run_id>/meta.json` (§6.6, §6.10)
 
@@ -176,7 +213,8 @@ leaderboard, gating checks, and registry views read `meta.json` only.
 |---|---|---|
 | Dataset version | Parquet (`datasets/vNNNNN.parquet`) | data load + every cleaning step |
 | Schema report sidecar | JSON (`datasets/vNNNNN.schema.json`) | with every dataset version |
-| Fitted preprocessing pipeline | joblib (`models/<run_id>/pipeline`) | Phase 3 |
+| Split indices | JSON (`preprocessing/split.json`) | preprocessing run |
+| Fitted preprocessing pipeline | joblib (`preprocessing/pipeline.joblib`) | preprocessing run |
 | Model | joblib / framework checkpoint | Phase 4 |
 | Portable inference | ONNX | Phase 5 |
 | Predictions | Parquet/CSV | Phase 5 |

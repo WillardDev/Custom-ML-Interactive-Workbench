@@ -119,3 +119,36 @@ def test_undo_restores_previous_version(app: AppTest) -> None:
     cleaning_after = [step for step in state.steps if step.tab == "cleaning"]
     assert len(cleaning_after) == cleaning_before - 1
     assert state.dataset is not None and state.dataset.version != version_before
+
+
+def test_preprocessing_build_unlocks_training_and_eda(app: AppTest) -> None:
+    app.run()
+    _load_sample(app)
+    _set_task(app)
+    _clean(app)
+
+    app.sidebar.radio("workflow_nav").set_value("preprocessing").run()
+    assert not app.exception
+    assert app.header[0].value == "3. Data Preprocessing"
+
+    state: ProjectState = app.session_state["state"]
+    assert state.split is None and state.pipeline is None
+
+    app.button("prep_build").click().run()
+    assert not app.exception
+    state = app.session_state["state"]
+    assert state.split is not None and state.split.fitted
+    assert state.pipeline is not None and state.pipeline.fitted
+    preprocessing_ops = [step.op for step in state.steps if step.tab == "preprocessing"]
+    assert "split" in preprocessing_ops
+    assert "encode" in preprocessing_ops
+
+    app.sidebar.radio("workflow_nav").set_value("eda").run()
+    assert not app.exception
+    assert app.header[0].value == "4. Exploratory Data Analysis"
+    assert any("Classification views" in item.value for item in app.subheader)
+
+    app.sidebar.radio("workflow_nav").set_value("training").run()
+    assert not app.exception
+    assert app.header[0].value == "6. Training"
+    assert not any("Locked:" in item.value for item in app.info)

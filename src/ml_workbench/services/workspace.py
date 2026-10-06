@@ -71,6 +71,10 @@ class Workspace:
         return self.project_dir / "models"
 
     @property
+    def preprocessing_dir(self) -> Path:
+        return self.project_dir / "preprocessing"
+
+    @property
     def cache_dir(self) -> Path:
         return self.project_dir / "cache"
 
@@ -84,7 +88,13 @@ class Workspace:
 
     def ensure(self) -> None:
         self.project_dir.mkdir(parents=True, exist_ok=True)
-        for directory in (self.datasets_dir, self.models_dir, self.cache_dir, self.reports_dir):
+        for directory in (
+            self.datasets_dir,
+            self.models_dir,
+            self.preprocessing_dir,
+            self.cache_dir,
+            self.reports_dir,
+        ):
             directory.mkdir(parents=True, exist_ok=True)
 
     def version_path(self, version: str) -> Path:

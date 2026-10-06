@@ -4,8 +4,36 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
+from ml_workbench.rules.split import (
+    choose_split,
+    cv_strategy,
+    default_holdout_fraction,
+    default_n_splits,
+)
 from ml_workbench.rules.task import build_task, suggest_task_type
+from ml_workbench.services.preprocessing_service import materialize_split
 from ml_workbench.state import TaskDefinition, TaskError, feature_columns
+
+
+def _task(
+    *,
+    learning_type: str = "supervised",
+    task_type: str = "binary",
+    target: str | None = None,
+    group: str | None = None,
+    time_column: str | None = None,
+    eval_labels: str | None = None,
+) -> TaskDefinition:
+    if target is None:
+        target = None if learning_type == "unsupervised" else "y"
+    return TaskDefinition(
+        learning_type=learning_type,
+        task_type=task_type,
+        target=target,
+        group=group,
+        time_column=time_column,
+        eval_labels=eval_labels,
+    )
 
 
 def test_task_suggestion_from_target() -> None:
@@ -73,46 +101,112 @@ def test_unsupervised_eval_labels_never_fit() -> None:
     assert feature_columns(task, frame) == ["x", "y"]
 
 
-@pytest.mark.skip(reason="pending implementation: docs/rules.md SPLIT-01")
 def test_split_chronological_no_shuffle() -> None:
-    raise NotImplementedError("docs/rules.md SPLIT-01")
+    task = _task(task_type="forecasting", time_column="date")
+    rule = choose_split(task)
+    assert rule.strategy == "chronological"
+    assert rule.rule_id == "SPLIT-01"
+    assert rule.shuffle is False
+
+    frame = pd.DataFrame(
+        {
+            "date": pd.date_range("2024-01-01", periods=10, freq="MS"),
+            "sales": [float(value) for value in range(10)],
+        }
+    )
+    result = materialize_split(frame, task, rule, test_size=0.3, seed=0)
+    assert result.train.max() < result.test.min()
 
 
-@pytest.mark.skip(reason="pending implementation: docs/rules.md SPLIT-02")
 def test_split_group_never_crosses_folds() -> None:
-    raise NotImplementedError("docs/rules.md SPLIT-02")
+    task = _task(task_type="regression", group="group")
+    rule = choose_split(task)
+    assert rule.strategy == "grouped"
+    frame = pd.DataFrame(
+        {
+            "group": ["g1"] * 6 + ["g2"] * 6,
+            "value": [float(value) for value in range(12)],
+        }
+    )
+    result = materialize_split(frame, task, rule, test_size=0.3, seed=0)
+    train_groups = set(frame.iloc[result.train]["group"])
+    test_groups = set(frame.iloc[result.test]["group"])
+    assert result.train.size > 0
+    assert result.test.size > 0
+    assert train_groups.isdisjoint(test_groups)
 
 
-@pytest.mark.skip(reason="pending implementation: docs/rules.md SPLIT-03")
 def test_split_stratified_classification() -> None:
-    raise NotImplementedError("docs/rules.md SPLIT-03")
+    rule = choose_split(_task(task_type="binary"))
+    assert rule.strategy == "stratified"
+    assert rule.rule_id == "SPLIT-03"
+    assert rule.shuffle is True
+
+    frame = pd.DataFrame(
+        {
+            "x": range(100),
+            "y": [0, 1] * 50,
+        }
+    )
+    result = materialize_split(frame, _task(task_type="binary"), rule, test_size=0.2, seed=0)
+    train_share = float(frame.iloc[result.train]["y"].mean())
+    test_share = float(frame.iloc[result.test]["y"].mean())
+    assert abs(train_share - test_share) < 0.15
+    assert abs(train_share - 0.5) < 0.1
 
 
-@pytest.mark.skip(reason="pending implementation: docs/rules.md SPLIT-04")
 def test_split_random_regression() -> None:
-    raise NotImplementedError("docs/rules.md SPLIT-04")
+    rule = choose_split(_task(task_type="regression"))
+    assert rule.strategy == "random"
+    assert rule.rule_id == "SPLIT-04"
+    assert rule.shuffle is True
 
 
-@pytest.mark.skip(reason="pending implementation: docs/rules.md SPLIT-05")
 def test_split_eval_labels_holdout_only() -> None:
-    raise NotImplementedError("docs/rules.md SPLIT-05")
+    task = _task(learning_type="unsupervised", task_type="clustering", eval_labels="label")
+    rule = choose_split(task)
+    assert rule.strategy == "eval_labels"
+    assert rule.rule_id == "SPLIT-05"
+
+    frame = pd.DataFrame({"x": range(10), "label": ["a"] * 5 + ["b"] * 5})
+    result = materialize_split(frame, task, rule, test_size=0.2, seed=0)
+    assert result.test.size == 2
 
 
-@pytest.mark.skip(reason="pending implementation: docs/rules.md SPLIT-06")
 def test_split_unsupervised_optional() -> None:
-    raise NotImplementedError("docs/rules.md SPLIT-06")
+    task = _task(learning_type="unsupervised", task_type="clustering")
+    rule = choose_split(task)
+    assert rule.strategy == "none"
+    assert rule.rule_id == "SPLIT-06"
 
 
-@pytest.mark.skip(reason="pending implementation: docs/rules.md SPLIT-07")
 def test_split_group_overrides_default() -> None:
-    raise NotImplementedError("docs/rules.md SPLIT-07")
+    binary = _task(task_type="binary", group="site")
+    grouped = choose_split(binary)
+    assert grouped.strategy == "grouped"
+    assert grouped.rule_id == "SPLIT-07"
+
+    unsupervised = _task(learning_type="unsupervised", task_type="clustering", group="site")
+    assert choose_split(unsupervised).rule_id == "SPLIT-07"
 
 
-@pytest.mark.skip(reason="pending implementation: docs/rules.md SPLIT-08")
 def test_cv_strategy_by_task() -> None:
-    raise NotImplementedError("docs/rules.md SPLIT-08")
+    assert (
+        cv_strategy(_task(task_type="forecasting", time_column="date")).strategy
+        == "time_series_split"
+    )
+    assert cv_strategy(_task(task_type="binary")).strategy == "stratified_kfold"
+    assert cv_strategy(_task(task_type="regression")).strategy == "kfold"
+    unsupervised = _task(learning_type="unsupervised", task_type="clustering")
+    assert cv_strategy(unsupervised).strategy == "shuffle_split"
+    grouped = _task(task_type="binary", group="site")
+    assert cv_strategy(grouped).strategy == "group_kfold"
+    assert all(rule.strategy for rule in (cv_strategy(_task(task_type="multiclass")),))
 
 
-@pytest.mark.skip(reason="pending implementation: docs/rules.md SPLIT-09")
 def test_default_split_ratio_and_folds() -> None:
-    raise NotImplementedError("docs/rules.md SPLIT-09")
+    assert default_holdout_fraction() == 0.2
+    assert default_n_splits() == 5
+    rule = choose_split(_task(task_type="regression"))
+    assert rule.n_splits == 5
+    assert rule.holdout_fraction == 0.2

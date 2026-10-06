@@ -10,13 +10,20 @@ from ml_workbench.rules.gating import ALL_REQS, DESCRIPTIONS, REQUIREMENTS, Gate
 from ml_workbench.services.workspace import Workspace
 from ml_workbench.state import ProjectState
 from ml_workbench.tabs import TAB_BY_ID, TAB_ORDER, TITLES
-from ml_workbench.ui import render_cleaning_tab, render_data_tab
+from ml_workbench.ui import (
+    render_cleaning_tab,
+    render_data_tab,
+    render_eda_tab,
+    render_preprocessing_tab,
+)
 
 DEFAULT_WORKSPACE_ROOT = Path(__file__).resolve().parents[2] / "workspace"
 
 RENDERERS: dict[str, Callable[[ProjectState, Workspace], None]] = {
     "data": render_data_tab,
     "cleaning": render_cleaning_tab,
+    "preprocessing": render_preprocessing_tab,
+    "eda": render_eda_tab,
 }
 
 
@@ -100,7 +107,7 @@ def _render_tab(state: ProjectState, workspace: Workspace, tab_id: str) -> None:
 def main() -> None:
     st.set_page_config(page_title="ML Workbench", layout="wide")
     st.sidebar.title("ML Workbench")
-    st.sidebar.caption("Phase 2: Data Insertion and Data Cleaning are live")
+    st.sidebar.caption("Phase 3: Preprocessing and EDA are live")
 
     state = _state()
     workspace = _workspace(state)
