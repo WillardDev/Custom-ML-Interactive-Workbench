@@ -225,6 +225,49 @@ Model pipelines are loaded lazily through a bounded LRU cache (`ModelCache`, cap
 rule `PERF-02`): `get_pipeline(workspace, run_id, cache=...)` tracks hit/miss counters and records
 evicted keys, so Prediction never re-disk-loads the active model on every interaction.
 
+## Phase 5 delivery artifacts (§6.8–6.10, `ERR-*`, `EXPL-*`, `OUT-01`, `EXPORT-01/02`)
+
+Heavy explainer jobs (SHAP; PDP/ICE) run off the UI thread through a `JobQueue`
+(`src/ml_workbench/services/jobs.py`, rule `PERF-05`): `submit(kind, fn)` returns a `JobHandle`
+(`job_` + 8 hex chars) with `state ∈ {queued, running, done, failed}`, `progress` and `message`;
+`poll` returns the in-place handle, `wait(job_id, timeout)` blocks on the underlying future. The
+MVP backs the queue with an in-process `ThreadPoolExecutor(max_workers=2)`; the UI only depends on
+submit/poll/wait, so the executor can later be swapped for a process pool or a broker without
+changes (`ADR-003`).
+
+- **Error views** (`services/error_service.py`): `error_views(state, workspace, run_id, cache=...)`
+  returns an `ErrorReport` with `views` keyed per task type (binary → confusion matrix 2×2, ROC with
+  AUC, PR curve, 9-row threshold analysis, 10-bin calibration; multiclass → normalized confusion
+  matrix, per-class metrics, most-confused pairs; regression → residuals vs predicted, residual
+  histogram, QQ plot, heteroscedasticity Spearman ρ, error by target quantile) plus `worst_n` (≤10
+  rows sorted by error) and `segments` (≤8-row summaries by cardinality) (ERR-01/02/03/07).
+- **Explainer cache** (`services/explain_service.py`): every `explain_model` writes JSON to
+  `projects/<id>/explain/<disk_cache_key(data_hash, model_id, params)>.json` and returns
+  `cached=True` on a subsequent hit for the same hash/model/params (EXPL-10/11, PERF-03). The JSON
+  mirrors the report: method, background rows, panels, warnings, computed_at. Explain dispatch is by
+  `explain_method` with shap optional (EXPL-01..03/05); SHAP/PDP/ICE jobs surface progress via the
+  queue.
+- **Outcome bundle** (`projects/<id>/outcome/`, OUT-01):
+  1. `predictions.csv` — full-sample predictions; a `prediction@threshold` column is added for
+     binary models with class probabilities (positive class from the trained estimator).
+  2. `threshold.json` — `{threshold, applied}`.
+  3. `model_card.json` — spec, task, metrics, params, data hash, seed, split, trained_at, library
+     versions, explain method, deliverable list.
+  4. `pipeline.joblib` — copy of the run's final artifact, or a fresh pipeline refit **on all data**
+     when `refit_on_all=True` (preprocessing choices replayed from the logged step ops;
+     `target_transform.joblib` re-emitted for regression).
+  Packaging appends a step-log entry `{op: "package", tab: "outcome", params: {run_id, model,
+  files}}` and marks downstream tabs stale.
+- **Report bundle** (`projects/<id>/reports/`, EXPORT-01/02):
+  1. `report.html` — human-readable model report (run, model, task, metrics, threshold, data hash).
+  2. `reproduce.py` — a standalone script that copies the project into a throwaway root
+     `reproduce-<hash-tail>`, reloads the raw v00001, **functionally replays the recorded cleaning
+     steps in log order** (dedupe → dtype fixes → drop rows → impute → outlier treatment), logs the
+     replay, persists the replayed frame, asserts the reproduced data hash equals `DATA_HASH`, then
+     re-runs preprocessing and trains with the recorded `run_id`/`mode='reproduce'`/`SEED`.
+  3. `manifest.json` — pins `data_hash`, `seed`, Python/platform, library versions, the step list,
+     the outcome file list, threshold, and the model id/primary/mean.
+
 ## Dataset versions and data hash (§6.1, §9)
 
 - Every dataset write creates a new immutable file
@@ -260,10 +303,14 @@ evicted keys, so Prediction never re-disk-loads the active model on every intera
 | Model metadata sidecar | JSON (`models/<run_id>/meta.json`) | Phase 4 (`TRAIN-01`) |
 | Model metrics sidecar | JSON (`models/<run_id>/metrics.json`) | Phase 4 (`PERF-01`) |
 | Target transform | joblib (`models/<run_id>/target_transform.joblib`) | Phase 4 regression + target transform |
-| Portable inference | ONNX | Phase 5 |
-| Predictions | Parquet/CSV | Phase 5 |
-| Reports | HTML, PDF | Phase 5 |
-| Reproducible script | `.py` generated from step log | Phase 5 |
+| Explainer cache | JSON (`explain/<cache_key>.json`) | Phase 5 (`EXPL-11`, `PERF-03`) |
+| Predictions | CSV (`outcome/predictions.csv`) | Phase 5 (`OUT-01`) |
+| Decision threshold payload | JSON (`outcome/threshold.json`) | Phase 5 (`OUT-01`) |
+| Model card | JSON (`outcome/model_card.json`) | Phase 5 (`OUT-01`) |
+| Outcome pipeline | joblib (`outcome/pipeline.joblib`) | Phase 5 (`OUT-01`) |
+| HTML report | `reports/report.html` | Phase 5 (`EXPORT-01`) |
+| Reproducible script | `reports/reproduce.py` generated from step log | Phase 5 (`EXPORT-01`) |
+| Report manifest | `reports/manifest.json` | Phase 5 (`EXPORT-01/02`) |
 
 **Security:** only artifacts the app produced are ever loaded; uploads validated and size-limited;
 one workspace directory per project (§9).

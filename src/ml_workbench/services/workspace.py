@@ -84,6 +84,14 @@ class Workspace:
         return self.project_dir / "reports"
 
     @property
+    def outcome_dir(self) -> Path:
+        return self.project_dir / "outcome"
+
+    @property
+    def explain_dir(self) -> Path:
+        return self.project_dir / "explain"
+
+    @property
     def steps_path(self) -> Path:
         return self.project_dir / "steps.json"
 
@@ -95,6 +103,8 @@ class Workspace:
             self.preprocessing_dir,
             self.cache_dir,
             self.reports_dir,
+            self.outcome_dir,
+            self.explain_dir,
         ):
             directory.mkdir(parents=True, exist_ok=True)
 

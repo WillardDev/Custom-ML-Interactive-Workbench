@@ -14,7 +14,10 @@ from ml_workbench.ui import (
     render_cleaning_tab,
     render_data_tab,
     render_eda_tab,
+    render_error_analysis_tab,
+    render_explainability_tab,
     render_modelling_tab,
+    render_outcome_tab,
     render_prediction_tab,
     render_preprocessing_tab,
     render_training_tab,
@@ -30,6 +33,9 @@ RENDERERS: dict[str, Callable[[ProjectState, Workspace], None]] = {
     "modelling": render_modelling_tab,
     "training": render_training_tab,
     "prediction": render_prediction_tab,
+    "error_analysis": render_error_analysis_tab,
+    "explainability": render_explainability_tab,
+    "outcome": render_outcome_tab,
 }
 
 
@@ -113,7 +119,7 @@ def _render_tab(state: ProjectState, workspace: Workspace, tab_id: str) -> None:
 def main() -> None:
     st.set_page_config(page_title="ML Workbench", layout="wide")
     st.sidebar.title("ML Workbench")
-    st.sidebar.caption("Phase 4: Modelling, Training and Prediction are live")
+    st.sidebar.caption("Phase 5: Error Analysis, Explainability and Outcome are live")
 
     state = _state()
     workspace = _workspace(state)

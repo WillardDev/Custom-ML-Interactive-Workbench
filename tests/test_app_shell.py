@@ -7,6 +7,7 @@ from streamlit.testing.v1 import AppTest
 
 from ml_workbench.services.workspace import Workspace
 from ml_workbench.state import ProjectState
+from ml_workbench.ui.explainability_tab import EXPLAIN_JOBS
 
 APP_PATH = Path(__file__).resolve().parents[1] / "src" / "ml_workbench" / "app.py"
 
@@ -194,3 +195,63 @@ def test_phase4_train_and_predict_end_to_end(app: AppTest) -> None:
     app.button("pred_single").click().run()
     assert not app.exception
     assert app.json, "single-row prediction renders a JSON payload"
+
+
+def test_phase5_error_explain_outcome_end_to_end(app: AppTest) -> None:
+    app.run()
+    _load_sample(app)
+    _set_task(app)
+    _clean(app)
+
+    app.sidebar.radio("workflow_nav").set_value("preprocessing").run()
+    app.button("prep_build").click().run()
+    assert not app.exception
+
+    app.sidebar.radio("workflow_nav").set_value("modelling").run()
+    assert not app.exception
+    app.button("mod_queue_all").click().run()
+    assert not app.exception
+
+    app.sidebar.radio("workflow_nav").set_value("training").run()
+    app.button("train_run").click().run()
+    assert not app.exception
+    state: ProjectState = app.session_state["state"]
+    assert state.trained_models
+    run_id = state.active_model_id
+    assert run_id is not None
+
+    app.sidebar.radio("workflow_nav").set_value("error_analysis").run()
+    assert not app.exception
+    assert app.header[0].value == "8. Error Analysis"
+    assert any("Error views" in item.value for item in app.subheader)
+    assert app.dataframe, "binary error views render dataframes"
+
+    app.sidebar.radio("workflow_nav").set_value("explainability").run()
+    assert not app.exception
+    assert app.header[0].value == "9. Model Explainability"
+    assert app.button("explain_run")
+    app.button("explain_run").click().run()
+    assert not app.exception
+    handle = app.session_state.get("explain_handle")
+    if handle is not None:
+        done = EXPLAIN_JOBS.wait(handle.job_id, timeout=30)
+        assert done.state == "done"
+    app.run()
+    assert not app.exception
+    assert any("explanation" in item.value.lower() for item in app.subheader)
+
+    app.sidebar.radio("workflow_nav").set_value("outcome").run()
+    assert not app.exception
+    assert app.header[0].value == "10. Outcome and Final Prediction"
+    app.button("outcome_build").click().run()
+    assert not app.exception
+    state = app.session_state["state"]
+    assert any(step.tab == "outcome" for step in state.steps)
+    payload = app.session_state["outcome_report"]
+    assert payload["files"]
+
+    workspace: Workspace = app.session_state["workspace"]
+    assert (workspace.reports_dir / "report.html").is_file()
+    assert (workspace.reports_dir / "reproduce.py").is_file()
+    assert (workspace.reports_dir / "manifest.json").is_file()
+    assert (workspace.outcome_dir / "predictions.csv").is_file()

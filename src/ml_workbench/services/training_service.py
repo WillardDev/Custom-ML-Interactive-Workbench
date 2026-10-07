@@ -423,6 +423,11 @@ def train_model(
     trained_at = utc_now()
     meta = {
         **_log_meta(state, spec, params, run_seed, plan, data_hash),
+        "task": {
+            "learning_type": task.learning_type,
+            "task_type": task.task_type,
+            "target": task.target,
+        },
         "mode": mode,
         "library_versions": {"sklearn": sklearn.__version__},
         "trained_at": trained_at,

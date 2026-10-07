@@ -25,17 +25,20 @@ Design source: *ML Workbench: Software Documentation v1.0 — Architecture and t
 | Phase 2 — Walking skeleton | **complete — exit criteria met** |
 | Phase 3 — Preprocessing + EDA | **complete — exit criteria met** |
 | Phase 4 — Modelling, Training, Prediction | **complete — exit criteria met** |
-| Phases 5–9 — Implementation | not started |
+| Phase 5 — Error Analysis, Explainability, Outcome | **complete — exit criteria met** |
+| Phases 6–9 — Unsupervised, Neural, Advanced, Production | not started |
 
 Current state: `docs/` and `registry/` hold the Phase 0 spec (124 rules, tab matrix, contracts);
 `src/` holds the foundation (project state, rules engine for gating/staleness, registry loader,
-Streamlit shell). Phases 2–4 are live: Data Insertion, Data Cleaning, Data Preprocessing, EDA,
-Modelling, Training, and Prediction tabs with versioned Parquet storage, schema reports, the step
-log with undo, task inference (TASK-01..03), cleaning rules (CLEAN-01..06), leakage-safe
-split/encode/scale preprocessing (SPLIT-01..09, ENC-*, SCALE-*, FEAT-*, DR-*, TT-01, PIPE-01),
-task-adaptive EDA (EDA-01..03, EDA-09, HINT-02), and the Phase 4 modelling/training/prediction
-stack (MODEL-01..04, HINT-01, TRAIN-01..07, METRIC-01..03, PRED-01..05, PERF-01..02, WARN-01..07) —
-all checks green (ruff, mypy strict, rule-test sync, pytest).
+Streamlit shell). Phases 2–5 are live: Data Insertion, Data Cleaning, Data Preprocessing, EDA,
+Modelling, Training, Prediction, Error Analysis, Model Explainability, and Outcome tabs with
+versioned Parquet storage, schema reports, the step log with undo, task inference (TASK-01..03),
+cleaning rules (CLEAN-01..06), leakage-safe split/encode/scale preprocessing (SPLIT-01..09, ENC-*,
+SCALE-*, FEAT-*, DR-*, TT-01, PIPE-01), task-adaptive EDA (EDA-01..03, EDA-09, HINT-02), the
+Phase 4 modelling/training/prediction stack (MODEL-01..04, HINT-01, TRAIN-01..07, METRIC-01..03,
+PRED-01..05, PERF-01..02, WARN-01..07), and the Phase 5 error/explainability/outcome stack
+(ERR-01..03/07, EXPL-01..03/05/10/11, OUT-01, EXPORT-01/02, PERF-05, GATE-02/04) — all checks
+green (ruff, mypy strict, rule-test sync, pytest).
 
 ## MVP scope (delivered in Phases 2–5)
 
@@ -153,6 +156,36 @@ LRU lazy-load works. → *met: `test_phase4_train_and_predict_end_to_end` queues
 trains it in the Training tab, and predicts in the Prediction tab; `test_get_pipeline_uses_lru_cache_and_evicts`
 proves capacity-2 eviction.*
 
+#### Phase 5 — Error Analysis, Explainability, Outcome ✅
+
+- [x] Error analysis views per task (ERR-01..03): binary confusion/ROC/PR/threshold/calibration,
+      multiclass normalized matrix + per-class + most-confused, regression residual/QQ/heteroscedastic
+      views; shared model-error tools (ERR-07) with worst-N rows and segment summaries
+      (`src/ml_workbench/rules/error_analysis.py`, `services/error_service.py`, `ui/error_analysis_tab.py`)
+- [x] Explainability dispatch by `explain_method` (EXPL-01..03/05): linear coefficients + local
+      attribution, tree feature importances (tree SHAP when the optional `shap` extra is installed),
+      permutation importance fallback, PDP/ICE panels, background-sample + spread warnings
+      (`src/ml_workbench/rules/explainability.py`, `services/explain_service.py`, `ui/explainability_tab.py`)
+- [x] Explain results cached by data hash + model + params in the workspace (EXPL-10/11, PERF-03 via
+      `disk_cache_key`); SHAP and PDP/ICE run as background jobs through `JobQueue` (PERF-05, EXPL-10)
+      (`src/ml_workbench/services/jobs.py` — submit/poll/wait interface behind a thread pool)
+- [x] Outcome bundling (OUT-01): full-sample predictions, decision threshold payload, model card,
+      and pipeline copy or refit-on-all; outcome step written to the step log
+      (`src/ml_workbench/rules/outcome.py`, `services/outcome_service.py`, `ui/outcome_tab.py`)
+- [x] Report + script export (EXPORT-01/02): HTML report, JSON manifest pinning data hash/seed/library
+      versions, and `reproduce.py` that clones the project into a throwaway root and replays the
+      recorded cleaning steps functionally, verifying the reproduced data hash before refitting
+      (`src/ml_workbench/services/report_service.py`)
+- [x] Rule tests implemented (ERR-01/02/03/07, EXPL-01/02/03/05/10/11, OUT-01, EXPORT-01/02,
+      PERF-03/05) + service tests (error views per task, explain caching + job round-trip, outcome
+      deliverables, report manifest/script) + an AppTest driving error → explain → outcome for the
+      full 10-tab flow
+
+**Exit criteria:** full 10-tab flow on sample data with a reproducible script; rule coverage green.
+→ *met: `test_phase5_error_explain_outcome_end_to_end` computes error views, runs the explainer as a
+background job, packages the outcome and writes the report bundle; `scaffold_rule_tests --check`
+stays in sync.*
+
 ### Implementation
 
 | # | Phase | Status | Content | Exit criteria |
@@ -160,7 +193,7 @@ proves capacity-2 eviction.*
 | 2 | Walking skeleton | ✅ | Project state manager, Data Insertion (schema report, hashing), Cleaning decision tree, step log + undo | Data → versioned cleaned Parquet; stale flags propagate |
 | 3 | Preprocessing + EDA | ✅ | Split/encoding/scaling rules from registry, leakage-safe pipeline build, task-adaptive EDA views | Leakage-safety tests pass; EDA adapts to task |
 | 4 | Modelling, Training, Prediction | ✅ | Registry filtering, hyperparameter forms, CV/tuning, leaderboard, artifacts + metadata sidecars, prediction tab | Train → leaderboard → predict on tabular cls/reg; LRU lazy-load works |
-| 5 | Error Analysis, Explainability, Outcome | — | Task-specific error views, SHAP as background jobs, report + script export + model card + ONNX | **MVP complete:** full 10-tab flow on sample data with reproducible script |
+| 5 | Error Analysis, Explainability, Outcome | ✅ | Task-specific error views, SHAP as background jobs, report + script export + model card | **MVP complete:** full 10-tab flow on sample data with reproducible script |
 | 6 | Unsupervised | — | Clustering, PCA/UMAP, anomaly detection, surrogate explanations | Design doc Phase 2 delivered |
 | 7 | Neural networks | — | MLP/transformers, GPU routing, live loss curves, gradient-based explanations | Design doc Phase 3 delivered |
 | 8 | Advanced | — | Time series, autoencoders, association rules, auto-compare | Design doc Phase 4 delivered |
