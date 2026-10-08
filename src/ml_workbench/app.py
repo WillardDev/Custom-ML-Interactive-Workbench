@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
 import streamlit as st
+
+if __package__ in {None, ""}:  # allow `streamlit run src/ml_workbench/app.py` from any Python
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ml_workbench.rules import evaluate_gate, gates, stale_banner
 from ml_workbench.rules.gating import ALL_REQS, DESCRIPTIONS, REQUIREMENTS, GateDecision
@@ -22,6 +26,7 @@ from ml_workbench.ui import (
     render_preprocessing_tab,
     render_training_tab,
 )
+from ml_workbench.ui.theme import begin_run, inject_theme, page_header
 
 DEFAULT_WORKSPACE_ROOT = Path(__file__).resolve().parents[2] / "workspace"
 
@@ -56,13 +61,21 @@ def _workspace(state: ProjectState) -> Workspace:
 
 
 def _navigation(state: ProjectState) -> str:
-    st.sidebar.header("Workflow")
+    decisions = gates(state)
+    current_id = st.session_state.get("workflow_nav") or TAB_ORDER[0]
+    current_no = TAB_BY_ID[current_id].number
 
     def label(tab_id: str) -> str:
         info = TAB_BY_ID[tab_id]
-        return f"{info.number}. {info.title}"
+        if decisions[tab_id].locked:
+            glyph = "🔒 "
+        elif info.number < current_no:
+            glyph = "✓ "
+        else:
+            glyph = ""
+        return f"{glyph}{info.number}. {info.title}"
 
-    return st.sidebar.radio("Workflow tabs", TAB_ORDER, format_func=label, key="workflow_nav")
+    return st.sidebar.radio("Workflow", TAB_ORDER, format_func=label, key="workflow_nav")
 
 
 def _sidebar_status(state: ProjectState) -> None:
@@ -97,7 +110,7 @@ def _requirements_panel(tab_id: str, decision: GateDecision, state: ProjectState
 def _render_tab(state: ProjectState, workspace: Workspace, tab_id: str) -> None:
     info = TAB_BY_ID[tab_id]
     decision = evaluate_gate(tab_id, state)
-    st.header(f"{info.number}. {info.title}")
+    page_header(info)
 
     if decision.locked:
         st.info(decision.message)
@@ -118,8 +131,10 @@ def _render_tab(state: ProjectState, workspace: Workspace, tab_id: str) -> None:
 
 def main() -> None:
     st.set_page_config(page_title="ML Workbench", layout="wide")
+    begin_run()
+    inject_theme()
     st.sidebar.title("ML Workbench")
-    st.sidebar.caption("Phase 5: Error Analysis, Explainability and Outcome are live")
+    st.sidebar.caption("Phase 8: Time Series and Association are live")
 
     state = _state()
     workspace = _workspace(state)

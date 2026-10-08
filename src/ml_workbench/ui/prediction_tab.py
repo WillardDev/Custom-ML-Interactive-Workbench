@@ -22,6 +22,7 @@ from ml_workbench.services.prediction_service import (
 )
 from ml_workbench.services.workspace import Workspace
 from ml_workbench.state import ProjectState
+from ml_workbench.ui.theme import card
 
 MODEL_CACHE = ModelCache(capacity=2)
 
@@ -43,26 +44,28 @@ def render_prediction_tab(state: ProjectState, workspace: Workspace) -> None:
     )
 
     binary = state.task.task_type == "binary"
-    st.subheader("Test-set evaluation (PRED-01/PRED-02)")
-    try:
-        evaluation = evaluate_test(state, workspace, run_id, cache=MODEL_CACHE)
-    except PredictionError as exc:
-        st.error(str(exc))
-        return
-    st.caption(
-        ", ".join(f"`{name} = {value:.4f}`" for name, value in sorted(evaluation.scores.items()))
-    )
+    with card("Test-set evaluation (PRED-01/PRED-02)"):
+        try:
+            evaluation = evaluate_test(state, workspace, run_id, cache=MODEL_CACHE)
+        except PredictionError as exc:
+            st.error(str(exc))
+            return
+        st.caption(
+            ", ".join(
+                f"`{name} = {value:.4f}`" for name, value in sorted(evaluation.scores.items())
+            )
+        )
 
-    if binary and evaluation.y_proba is not None:
-        _render_binary(state, evaluation, run_id)
-    elif state.task.task_type == "anomaly_detection":
-        _render_anomaly(state, workspace, run_id)
-    elif state.task.task_type == "forecasting":
-        _render_forecasting(state, workspace, run_id, evaluation)
-    elif state.task.learning_type == "unsupervised":
-        _render_unsupervised(state, workspace, run_id, evaluation)
-    else:
-        _render_regression(state, evaluation, run_id)
+        if binary and evaluation.y_proba is not None:
+            _render_binary(state, evaluation, run_id)
+        elif state.task.task_type == "anomaly_detection":
+            _render_anomaly(state, workspace, run_id)
+        elif state.task.task_type == "forecasting":
+            _render_forecasting(state, workspace, run_id, evaluation)
+        elif state.task.learning_type == "unsupervised":
+            _render_unsupervised(state, workspace, run_id, evaluation)
+        else:
+            _render_regression(state, evaluation, run_id)
 
     _render_single_row(state, workspace, run_id)
     _render_batch(state, workspace, run_id)
@@ -201,42 +204,42 @@ def _render_single_row(state: ProjectState, workspace: Workspace, run_id: str) -
     frame = state.frame
     if frame is None:
         return
-    st.subheader("Single-row prediction")
-    row: dict[str, Any] = {}
-    for column in frame.columns:
-        if is_numeric_dtype(frame[column]):
-            row[column] = st.number_input(
-                column,
-                value=float(frame[column].iloc[0]),
-                key=f"pred_row_{column}",
-            )
-        else:
-            unique = sorted(frame[column].dropna().unique().tolist())
-            row[column] = st.selectbox(column, unique, key=f"pred_row_{column}")
-    if st.button("Predict this row", key="pred_single"):
-        try:
-            output = predict_single(state, workspace, run_id, row, cache=MODEL_CACHE)
-        except PredictionError as exc:
-            st.error(str(exc))
-        else:
-            st.json(output, expanded=True)
+    with card("Single-row prediction"):
+        row: dict[str, Any] = {}
+        for column in frame.columns:
+            if is_numeric_dtype(frame[column]):
+                row[column] = st.number_input(
+                    column,
+                    value=float(frame[column].iloc[0]),
+                    key=f"pred_row_{column}",
+                )
+            else:
+                unique = sorted(frame[column].dropna().unique().tolist())
+                row[column] = st.selectbox(column, unique, key=f"pred_row_{column}")
+        if st.button("Predict this row", key="pred_single"):
+            try:
+                output = predict_single(state, workspace, run_id, row, cache=MODEL_CACHE)
+            except PredictionError as exc:
+                st.error(str(exc))
+            else:
+                st.json(output, expanded=True)
 
 
 def _render_batch(state: ProjectState, workspace: Workspace, run_id: str) -> None:
-    st.subheader("Batch CSV prediction")
-    uploaded = st.file_uploader(
-        "Upload a CSV with the same feature columns", type=["csv"], key="pred_batch_file"
-    )
-    if uploaded is not None:
-        frame = pd.read_csv(uploaded)
-        if st.button("Predict batch", key="pred_batch"):
-            try:
-                result = predict_frame(state, workspace, run_id, frame, cache=MODEL_CACHE)
-                st.dataframe(result.df, use_container_width=True)
-                if result.has_proba:
-                    st.caption("Probability columns `p_<class>` are included.")
-            except PredictionError as exc:
-                st.error(str(exc))
+    with card("Batch CSV prediction"):
+        uploaded = st.file_uploader(
+            "Upload a CSV with the same feature columns", type=["csv"], key="pred_batch_file"
+        )
+        if uploaded is not None:
+            frame = pd.read_csv(uploaded)
+            if st.button("Predict batch", key="pred_batch"):
+                try:
+                    result = predict_frame(state, workspace, run_id, frame, cache=MODEL_CACHE)
+                    st.dataframe(result.df, use_container_width=True)
+                    if result.has_proba:
+                        st.caption("Probability columns `p_<class>` are included.")
+                except PredictionError as exc:
+                    st.error(str(exc))
 
 
 def _format_model(trained: list[Any], run_id: str) -> str:

@@ -12,6 +12,7 @@ from ml_workbench.services.training_service import (
 )
 from ml_workbench.services.workspace import Workspace
 from ml_workbench.state import ModelRun, ProjectState
+from ml_workbench.ui.theme import card
 
 QUEUE_KEY = "training_queue"
 
@@ -19,61 +20,61 @@ QUEUE_KEY = "training_queue"
 def render_training_tab(state: ProjectState, workspace: Workspace) -> None:
     queue = list(st.session_state.get(QUEUE_KEY, []))
     if queue:
-        st.subheader("Queued jobs")
-        rows = [
-            {"run_id": entry["run_id"], "model": entry["model_id"], "mode": entry["mode"]}
-            for entry in queue
-        ]
-        st.table(rows)
-        if st.button(f"Run {len(queue)} queued job(s)", key="train_run"):
-            remaining: list[dict[str, Any]] = []
-            for entry in queue:
-                run_id = str(entry["run_id"])
-                try:
-                    if entry["mode"] == "auto_tuning":
-                        tuned = tune_hyperparameters(
-                            state, workspace, str(entry["model_id"]), num_trials=4
-                        )
-                        tri_result = train_model(
-                            state,
-                            workspace,
-                            str(entry["model_id"]),
-                            tuned.best_params,
-                            run_id=run_id,
-                            mode="auto_tuning",
-                        )
-                        st.success(
-                            f"{tri_result.model_id} trained with tuned params "
-                            f"({tuned.primary}={tri_result.mean:.4f})."
-                        )
-                    else:
-                        result = train_model(
-                            state,
-                            workspace,
-                            str(entry["model_id"]),
-                            dict(entry["params"] or {}),
-                            run_id=run_id,
-                            mode=str(entry["mode"]),
-                        )
-                        st.success(
-                            f"{result.model_id} ({result.primary}={result.mean:.4f}, "
-                            f"gap={result.gap:.4f})."
-                        )
-                except TrainingError as exc:
-                    st.error(f"{entry['model_id']}: {exc}")
-            st.session_state[QUEUE_KEY] = remaining
+        with card("Queued jobs"):
+            rows = [
+                {"run_id": entry["run_id"], "model": entry["model_id"], "mode": entry["mode"]}
+                for entry in queue
+            ]
+            st.table(rows)
+            if st.button(f"Run {len(queue)} queued job(s)", key="train_run"):
+                remaining: list[dict[str, Any]] = []
+                for entry in queue:
+                    run_id = str(entry["run_id"])
+                    try:
+                        if entry["mode"] == "auto_tuning":
+                            tuned = tune_hyperparameters(
+                                state, workspace, str(entry["model_id"]), num_trials=4
+                            )
+                            tri_result = train_model(
+                                state,
+                                workspace,
+                                str(entry["model_id"]),
+                                tuned.best_params,
+                                run_id=run_id,
+                                mode="auto_tuning",
+                            )
+                            st.success(
+                                f"{tri_result.model_id} trained with tuned params "
+                                f"({tuned.primary}={tri_result.mean:.4f})."
+                            )
+                        else:
+                            result = train_model(
+                                state,
+                                workspace,
+                                str(entry["model_id"]),
+                                dict(entry["params"] or {}),
+                                run_id=run_id,
+                                mode=str(entry["mode"]),
+                            )
+                            st.success(
+                                f"{result.model_id} ({result.primary}={result.mean:.4f}, "
+                                f"gap={result.gap:.4f})."
+                            )
+                    except TrainingError as exc:
+                        st.error(f"{entry['model_id']}: {exc}")
+                st.session_state[QUEUE_KEY] = remaining
     else:
         st.caption("No training jobs queued. Configure models in the Modelling tab.")
         if state.models:
             st.caption("Trained runs are listed below.")
 
-    st.subheader("Leaderboard (TRAIN-05, PERF-01)")
-    if state.has_trained_model:
-        table = leaderboard(workspace, state.models)
-        st.dataframe(table, use_container_width=True)
-        _render_run_details(state, workspace)
-    else:
-        st.info("No trained models yet.")
+    with card("Leaderboard (TRAIN-05, PERF-01)"):
+        if state.has_trained_model:
+            table = leaderboard(workspace, state.models)
+            st.dataframe(table, use_container_width=True)
+            _render_run_details(state, workspace)
+        else:
+            st.info("No trained models yet.")
 
 
 def _render_run_details(state: ProjectState, workspace: Workspace) -> None:

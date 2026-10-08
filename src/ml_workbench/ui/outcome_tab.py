@@ -13,6 +13,7 @@ from ml_workbench.services.outcome_service import (
 from ml_workbench.services.report_service import build_report
 from ml_workbench.services.workspace import Workspace
 from ml_workbench.state import ProjectState
+from ml_workbench.ui.theme import card
 
 
 def render_outcome_tab(state: ProjectState, workspace: Workspace) -> None:
@@ -75,10 +76,12 @@ def render_outcome_tab(state: ProjectState, workspace: Workspace) -> None:
         )
         return
 
-    st.subheader("Deliverables (OUT-01..04)")
-    st.table(pd.DataFrame({"file": payload["files"]}))
-    st.subheader("Report bundle (EXPORT-01)")
-    st.table(pd.DataFrame({"file": [payload["report"], payload["script"], payload["manifest"]]}))
+    with card("Deliverables (OUT-01..04)"):
+        st.table(pd.DataFrame({"file": payload["files"]}))
+    with card("Report bundle (EXPORT-01)"):
+        st.table(
+            pd.DataFrame({"file": [payload["report"], payload["script"], payload["manifest"]]})
+        )
 
     model_card = workspace.outcome_dir / "model_card.json"
     if model_card.is_file():

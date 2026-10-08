@@ -10,6 +10,7 @@ from ml_workbench.services.error_service import ErrorAnalysisError, error_views
 from ml_workbench.services.model_cache import ModelCache
 from ml_workbench.services.workspace import Workspace
 from ml_workbench.state import ProjectState
+from ml_workbench.ui.theme import card
 
 MODEL_CACHE = ModelCache(capacity=2)
 
@@ -36,27 +37,27 @@ def render_error_analysis_tab(state: ProjectState, workspace: Workspace) -> None
         return
 
     views = {str(view["view"]): view for view in report.views}
-    st.subheader("Error views")
-    if state.task.task_type == "binary":
-        _render_binary(views)
-    elif state.task.task_type in {"multiclass", "multilabel"}:
-        _render_multiclass(views)
-    elif state.task.task_type in {"regression", "forecasting"}:
-        _render_regression(views)
-    elif state.task.task_type == "clustering":
-        _render_clustering(views)
-    elif state.task.task_type == "dimensionality_reduction":
-        _render_dimred(views)
-    elif state.task.task_type == "anomaly_detection":
-        _render_anomaly(views)
-    _render_neural(views)
+    with card("Error views"):
+        if state.task.task_type == "binary":
+            _render_binary(views)
+        elif state.task.task_type in {"multiclass", "multilabel"}:
+            _render_multiclass(views)
+        elif state.task.task_type in {"regression", "forecasting"}:
+            _render_regression(views)
+        elif state.task.task_type == "clustering":
+            _render_clustering(views)
+        elif state.task.task_type == "dimensionality_reduction":
+            _render_dimred(views)
+        elif state.task.task_type == "anomaly_detection":
+            _render_anomaly(views)
+        _render_neural(views)
 
-    st.markdown("##### Worst-N rows (ERR-07)")
-    if not report.worst_n.empty:
-        st.dataframe(report.worst_n, use_container_width=True)
-    if report.segments is not None and not report.segments.empty:
-        st.markdown("##### Segment slices (ERR-07)")
-        st.dataframe(report.segments, use_container_width=True)
+        st.markdown("##### Worst-N rows (ERR-07)")
+        if not report.worst_n.empty:
+            st.dataframe(report.worst_n, use_container_width=True)
+        if report.segments is not None and not report.segments.empty:
+            st.markdown("##### Segment slices (ERR-07)")
+            st.dataframe(report.segments, use_container_width=True)
 
 
 def _render_clustering(views: dict[str, Any]) -> None:

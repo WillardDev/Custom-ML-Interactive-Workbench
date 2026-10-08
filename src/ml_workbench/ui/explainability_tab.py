@@ -11,6 +11,7 @@ from ml_workbench.services.jobs import JobHandle, JobQueue
 from ml_workbench.services.model_cache import ModelCache
 from ml_workbench.services.workspace import Workspace
 from ml_workbench.state import ProjectState
+from ml_workbench.ui.theme import card
 
 MODEL_CACHE = ModelCache(capacity=2)
 EXPLAIN_JOBS = JobQueue(max_workers=2)
@@ -66,109 +67,113 @@ def render_explainability_tab(state: ProjectState, workspace: Workspace) -> None
 
 
 def _render_report(report: Any) -> None:
-    st.subheader(f"{report.method} explanation")
-    for panel in report.panels:
-        name = str(panel["panel"])
-        if name == "coefficients":
-            table = panel.get("table")
-            st.markdown("##### Standardized coefficients (EXPL-01)")
-            if table:
-                st.dataframe(pd.DataFrame(table).round(4), use_container_width=True)
-        elif name == "local_attribution":
-            attribution = panel.get("attribution")
-            st.markdown("##### Local attribution (first row, EXPL-05)")
-            if attribution:
-                rows = sorted(attribution, key=lambda row: abs(row["contribution"]), reverse=True)
-                st.dataframe(pd.DataFrame(rows).round(4), use_container_width=True)
-        elif name == "importances":
-            st.markdown("##### Feature importances (EXPL-02)")
-            st.dataframe(pd.DataFrame(panel["table"]).round(4), use_container_width=True)
-            if panel.get("bias_note"):
-                st.caption(panel["bias_note"])
-        elif name == "permutation_importance":
-            st.markdown("##### Permutation importance (EXPL-03)")
-            st.dataframe(pd.DataFrame(panel["rows"]).round(4), use_container_width=True)
-            if panel.get("note"):
-                st.caption(panel["note"])
-        elif name == "gradient_attributions":
-            st.markdown("##### Integrated Gradients — global attributions (EXPL-04)")
-            st.dataframe(pd.DataFrame(panel["table"]).round(4), use_container_width=True)
-            if panel.get("note"):
-                st.caption(panel["note"])
-        elif name == "gradient_local":
-            st.markdown("##### Integrated Gradients — first row (EXPL-04)")
-            attribution = panel.get("attribution") or []
-            if attribution:
-                st.dataframe(pd.DataFrame(attribution).round(4), use_container_width=True)
-        elif name == "pdp_ice":
-            _render_pdp(panel)
-        elif name == "centroid_heatmap":
-            st.markdown("##### Cluster centroids (EXPL-06)")
-            st.dataframe(pd.DataFrame(panel["table"]), use_container_width=True)
-            if panel.get("note"):
-                st.caption(panel["note"])
-        elif name == "anova":
-            st.markdown("##### Per-feature F-ratio across clusters (EXPL-06)")
-            st.dataframe(pd.DataFrame(panel["table"]), use_container_width=True)
-        elif name == "surrogate_tree":
-            st.markdown("##### Surrogate decision tree importances (EXPL-06)")
-            st.dataframe(pd.DataFrame(panel["table"]).round(4), use_container_width=True)
-            if panel.get("bias_note"):
-                st.caption(panel["bias_note"])
-        elif name == "personas":
-            st.markdown("##### Cluster personas (EXPL-06)")
-            for persona in panel["personas"]:
-                with st.expander(f"Cluster {persona['cluster']} · {persona['size']} rows"):
-                    st.dataframe(pd.DataFrame(persona["top_features"]), use_container_width=True)
-        elif name == "loadings_table":
-            st.markdown("##### Component loadings (EXPL-07)")
-            st.dataframe(pd.DataFrame(panel["table"]), use_container_width=True)
-            if panel.get("note"):
-                st.caption(panel["note"])
-        elif name == "variance_explained":
-            explained = panel.get("explained") or []
-            st.markdown("##### Explained variance ratio (EXPL-07)")
-            fig = go.Figure(go.Bar(x=list(range(1, len(explained) + 1)), y=explained))
-            fig.update_layout(xaxis_title="Component", yaxis_title="Explained variance ratio")
-            st.plotly_chart(fig, use_container_width=True)
-        elif name == "biplot_coordinates":
-            st.markdown("##### Feature loading biplot — PC1 vs PC2 (EXPL-07)")
-            rows = panel["table"]
-            fig = go.Figure(
-                go.Scatter(
-                    x=[row["x"] for row in rows],
-                    y=[row["y"] for row in rows],
-                    mode="markers+text",
-                    text=[row["feature"] for row in rows],
-                    textposition="top center",
+    with card(f"{report.method} explanation"):
+        for panel in report.panels:
+            name = str(panel["panel"])
+            if name == "coefficients":
+                table = panel.get("table")
+                st.markdown("##### Standardized coefficients (EXPL-01)")
+                if table:
+                    st.dataframe(pd.DataFrame(table).round(4), use_container_width=True)
+            elif name == "local_attribution":
+                attribution = panel.get("attribution")
+                st.markdown("##### Local attribution (first row, EXPL-05)")
+                if attribution:
+                    rows = sorted(
+                        attribution, key=lambda row: abs(row["contribution"]), reverse=True
+                    )
+                    st.dataframe(pd.DataFrame(rows).round(4), use_container_width=True)
+            elif name == "importances":
+                st.markdown("##### Feature importances (EXPL-02)")
+                st.dataframe(pd.DataFrame(panel["table"]).round(4), use_container_width=True)
+                if panel.get("bias_note"):
+                    st.caption(panel["bias_note"])
+            elif name == "permutation_importance":
+                st.markdown("##### Permutation importance (EXPL-03)")
+                st.dataframe(pd.DataFrame(panel["rows"]).round(4), use_container_width=True)
+                if panel.get("note"):
+                    st.caption(panel["note"])
+            elif name == "gradient_attributions":
+                st.markdown("##### Integrated Gradients — global attributions (EXPL-04)")
+                st.dataframe(pd.DataFrame(panel["table"]).round(4), use_container_width=True)
+                if panel.get("note"):
+                    st.caption(panel["note"])
+            elif name == "gradient_local":
+                st.markdown("##### Integrated Gradients — first row (EXPL-04)")
+                attribution = panel.get("attribution") or []
+                if attribution:
+                    st.dataframe(pd.DataFrame(attribution).round(4), use_container_width=True)
+            elif name == "pdp_ice":
+                _render_pdp(panel)
+            elif name == "centroid_heatmap":
+                st.markdown("##### Cluster centroids (EXPL-06)")
+                st.dataframe(pd.DataFrame(panel["table"]), use_container_width=True)
+                if panel.get("note"):
+                    st.caption(panel["note"])
+            elif name == "anova":
+                st.markdown("##### Per-feature F-ratio across clusters (EXPL-06)")
+                st.dataframe(pd.DataFrame(panel["table"]), use_container_width=True)
+            elif name == "surrogate_tree":
+                st.markdown("##### Surrogate decision tree importances (EXPL-06)")
+                st.dataframe(pd.DataFrame(panel["table"]).round(4), use_container_width=True)
+                if panel.get("bias_note"):
+                    st.caption(panel["bias_note"])
+            elif name == "personas":
+                st.markdown("##### Cluster personas (EXPL-06)")
+                for persona in panel["personas"]:
+                    with st.expander(f"Cluster {persona['cluster']} · {persona['size']} rows"):
+                        st.dataframe(
+                            pd.DataFrame(persona["top_features"]), use_container_width=True
+                        )
+            elif name == "loadings_table":
+                st.markdown("##### Component loadings (EXPL-07)")
+                st.dataframe(pd.DataFrame(panel["table"]), use_container_width=True)
+                if panel.get("note"):
+                    st.caption(panel["note"])
+            elif name == "variance_explained":
+                explained = panel.get("explained") or []
+                st.markdown("##### Explained variance ratio (EXPL-07)")
+                fig = go.Figure(go.Bar(x=list(range(1, len(explained) + 1)), y=explained))
+                fig.update_layout(xaxis_title="Component", yaxis_title="Explained variance ratio")
+                st.plotly_chart(fig, use_container_width=True)
+            elif name == "biplot_coordinates":
+                st.markdown("##### Feature loading biplot — PC1 vs PC2 (EXPL-07)")
+                rows = panel["table"]
+                fig = go.Figure(
+                    go.Scatter(
+                        x=[row["x"] for row in rows],
+                        y=[row["y"] for row in rows],
+                        mode="markers+text",
+                        text=[row["feature"] for row in rows],
+                        textposition="top center",
+                    )
                 )
-            )
-            fig.add_hline(y=0.0, line_dash="dot")
-            fig.add_vline(x=0.0, line_dash="dot")
-            fig.update_layout(xaxis_title="PC1 loading", yaxis_title="PC2 loading")
-            st.plotly_chart(fig, use_container_width=True)
-        elif name == "reconstruction_error_per_feature":
-            st.markdown("##### Reconstruction error per feature (EXPL-07)")
-            st.dataframe(pd.DataFrame(panel["table"]).round(4), use_container_width=True)
-        elif name == "per_feature_deviation":
-            st.markdown("##### Flagged-row feature deviation (EXPL-08)")
-            st.dataframe(pd.DataFrame(panel["table"]).round(4), use_container_width=True)
-            if panel.get("note"):
-                st.caption(panel["note"])
-        elif name == "history_trace":
-            _render_history_trace(panel)
-        elif name == "rule_network":
-            _render_rule_network(panel)
-        elif name == "lift_vs_confidence":
-            _render_lift_confidence(panel)
-        elif name == "rule_table":
-            st.markdown("##### Mined rules (EXPL-09)")
-            st.dataframe(pd.DataFrame(panel["table"]), use_container_width=True)
+                fig.add_hline(y=0.0, line_dash="dot")
+                fig.add_vline(x=0.0, line_dash="dot")
+                fig.update_layout(xaxis_title="PC1 loading", yaxis_title="PC2 loading")
+                st.plotly_chart(fig, use_container_width=True)
+            elif name == "reconstruction_error_per_feature":
+                st.markdown("##### Reconstruction error per feature (EXPL-07)")
+                st.dataframe(pd.DataFrame(panel["table"]).round(4), use_container_width=True)
+            elif name == "per_feature_deviation":
+                st.markdown("##### Flagged-row feature deviation (EXPL-08)")
+                st.dataframe(pd.DataFrame(panel["table"]).round(4), use_container_width=True)
+                if panel.get("note"):
+                    st.caption(panel["note"])
+            elif name == "history_trace":
+                _render_history_trace(panel)
+            elif name == "rule_network":
+                _render_rule_network(panel)
+            elif name == "lift_vs_confidence":
+                _render_lift_confidence(panel)
+            elif name == "rule_table":
+                st.markdown("##### Mined rules (EXPL-09)")
+                st.dataframe(pd.DataFrame(panel["table"]), use_container_width=True)
 
-    if report.warnings:
-        for warning in report.warnings:
-            st.warning(warning)
-    st.caption(f"background rows: {report.background_rows} · cached: {report.cached}")
+        if report.warnings:
+            for warning in report.warnings:
+                st.warning(warning)
+        st.caption(f"background rows: {report.background_rows} · cached: {report.cached}")
 
 
 def _render_pdp(panel: dict[str, Any]) -> None:
