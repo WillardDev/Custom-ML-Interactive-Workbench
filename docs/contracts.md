@@ -268,6 +268,42 @@ changes (`ADR-003`).
   3. `manifest.json` — pins `data_hash`, `seed`, Python/platform, library versions, the step list,
      the outcome file list, threshold, and the model id/primary/mean.
 
+## Phase 6 delivery artifacts (§6.8–6.10, `METRIC-05..07`, `ERR-04..06`, `EXPL-06..08`, `OUT-02..04`)
+
+Unsupervised tasks (`learning_type="unsupervised"`) reuse the same cleaving/preprocessing/training
+contracts but score on evaluation labels when provided and package task-specific outcomes:
+
+- **Unsupervised splits** (SPLIT-05/06, `choose_split` in `rules/split.py`): with `eval_labels` set,
+  a stratified holdout (`strategy="eval_labels"`, SPLIT-05) so labeled scoring exists; without them,
+  `strategy="none"` (SPLIT-06), which makes `evaluate_test`/`error_views` raise the clear
+  `PredictionError`/`ErrorAnalysisError` "the split strategy produced no test rows".
+- **Holdout scoring** (`services/prediction_service.py::evaluate_test`): clustering → silhouette +
+  Davies-Bouldin + Calinski-Harabasz (+ ARI/NMI when labeled, METRIC-05); dimensional-reduction →
+  explained variance + reconstruction error + trustworthiness (METRIC-06); anomaly → score
+  distribution (+ ROC/PR-AUC when labeled, METRIC-07). `predict_frame` emits `pc1..pcN` columns for
+  transformers, `prediction` (cluster id or 0/1 flag) otherwise.
+- **Anomaly labels & decision** (`training_service.py`): labels coerce to `{inlier=0, outlier≠0}`;
+  the decision score is `-decision_function` so higher = more anomalous; a row is flagged when
+  `score > 0` (default threshold 0 recorded in OUT-04).
+- **Unsupervised error views** (ERR-04/05/06, `error_views`): per-sample silhouette + points sorted
+  lowest + cluster size imbalance + stability warning (clustering); reconstruction error per row +
+  count of points beyond the 80th-percentile error (dim-reduction); anomaly score mean/std/flagged
+  count, score quantiles at 50/90/95/99%, top flagged rows and TP/FP/FN/TN vs labels.
+- **Unsupervised explanations** (EXPL-06/07/08, `_unsupervised_explanations`): models score the
+  **preprocessed** matrix (cluster labels, PCA embedding, anomaly decisions) while tables report in
+  original feature units — cluster centroids + per-feature F-ratio + surrogate decision tree +
+  personas; PCA loadings + explained variance + biplot + per-feature reconstruction error; anomaly
+  feature importances + flagged-row z-score deviations.
+- **Unsupervised outcome bundles** (`outcome/`, OUT-02/03/04) — each ships `pipeline.joblib`
+  (copy of the run artifact) and `model_card.json`:
+  1. **Clustering (OUT-02):** `clusters.csv` (dataset + `cluster_id`), `profiles.csv`
+     (per-cluster size + per-feature mean/std), `personas.json` (top-deviation features per cluster).
+  2. **Dim-reduction (OUT-03):** `embeddings.csv` (dataset + `pc1..pcN`), `summary.json`
+     (n_components, explained/cumulative variance, mean reconstruction error, metrics).
+  3. **Anomaly (OUT-04):** `flagged.csv` (dataset + `score` + `flagged`), `score_distribution.json`
+     (count/flagged/mean/std/min/quartiles/max), `threshold.json` (`{threshold: 0.0, applied: true}`).
+  Packaging appends the same `{op: "package", tab: "outcome"}` step-log entry as OUT-01.
+
 ## Dataset versions and data hash (§6.1, §9)
 
 - Every dataset write creates a new immutable file
@@ -311,6 +347,13 @@ changes (`ADR-003`).
 | HTML report | `reports/report.html` | Phase 5 (`EXPORT-01`) |
 | Reproducible script | `reports/reproduce.py` generated from step log | Phase 5 (`EXPORT-01`) |
 | Report manifest | `reports/manifest.json` | Phase 5 (`EXPORT-01/02`) |
+| Dataset with cluster ids | CSV (`outcome/clusters.csv`) | Phase 6 (`OUT-02`) |
+| Cluster profiles | CSV (`outcome/profiles.csv`) | Phase 6 (`OUT-02`) |
+| Cluster personas | JSON (`outcome/personas.json`) | Phase 6 (`OUT-02`) |
+| Transformed dataset / embeddings | CSV (`outcome/embeddings.csv`) | Phase 6 (`OUT-03`) |
+| Variance/reconstruction summary | JSON (`outcome/summary.json`) | Phase 6 (`OUT-03`) |
+| Flagged rows with anomaly scores | CSV (`outcome/flagged.csv`) | Phase 6 (`OUT-04`) |
+| Anomaly score distribution | JSON (`outcome/score_distribution.json`) | Phase 6 (`OUT-04`) |
 
 **Security:** only artifacts the app produced are ever loaded; uploads validated and size-limited;
 one workspace directory per project (§9).

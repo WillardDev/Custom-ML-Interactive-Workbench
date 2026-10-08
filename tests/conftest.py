@@ -54,13 +54,15 @@ def binary_frame() -> pd.DataFrame:
 
 @pytest.fixture
 def prepared_workspace(tmp_path):
-    """Factory: a cleaned + preprocessed (train/test split) project ready for Phase 4."""
+    """Factory: a cleaned + preprocessed (train/test split) project ready for training."""
 
     def make(
         frame: pd.DataFrame,
         *,
         target: str = "target",
         task_type: str = "binary",
+        learning_type: str = "supervised",
+        eval_labels: str | None = None,
         options=None,
     ):
         from ml_workbench.rules.task import build_task
@@ -88,7 +90,15 @@ def prepared_workspace(tmp_path):
             ]
         )
         state.steps = ws.read_steps()
-        state.task = build_task(frame, "supervised", target=target, task_type=task_type)
+        if learning_type == "unsupervised":
+            state.task = build_task(
+                frame,
+                "unsupervised",
+                task_type=task_type,
+                eval_labels=eval_labels,
+            )
+        else:
+            state.task = build_task(frame, "supervised", target=target, task_type=task_type)
         run_preprocessing(state, ws, options or PreprocessingOptions())
         return state, ws
 

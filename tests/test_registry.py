@@ -32,11 +32,14 @@ def test_registry_loads_and_validates() -> None:
 def test_enabled_models_filter_by_task_and_phase() -> None:
     models = load_registry()
 
-    # CURRENT_PHASE is 4: the default phase exposes phase-4 sklearn models.
+    # CURRENT_PHASE is 6: the default phase exposes phase-6 sklearn models.
     default = {spec.id for spec in available_models(models)}
     assert "logistic_regression" in default
-    assert "kmeans" not in default
+    assert "kmeans" in default
+    assert "pca" in default
+    assert "isolation_forest" in default
     assert "lightgbm" not in default, "uninstalled libraries are filtered out"
+    assert "mlp" not in default, "phase-7 models stay behind the phase budget"
 
     assert enabled_models(models, phase=1) == []
 

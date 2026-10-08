@@ -12,9 +12,12 @@ import joblib
 import numpy as np
 import pandas as pd
 import sklearn
+from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
 from sklearn.ensemble import (
     HistGradientBoostingClassifier,
     HistGradientBoostingRegressor,
+    IsolationForest,
     RandomForestClassifier,
     RandomForestRegressor,
 )
@@ -28,11 +31,14 @@ from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
     balanced_accuracy_score,
+    calinski_harabasz_score,
+    davies_bouldin_score,
     f1_score,
     matthews_corrcoef,
     mean_absolute_error,
     mean_squared_error,
     r2_score,
+    silhouette_score,
 )
 from sklearn.model_selection import (
     GroupKFold,
@@ -47,7 +53,13 @@ from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 
 from ml_workbench.registry import ModelSpec, load_registry
 from ml_workbench.rules.eda import skew
-from ml_workbench.rules.metrics import MetricPlan, metric_plan
+from ml_workbench.rules.metrics import (
+    MetricPlan,
+    anomaly_labeled_scores,
+    labeled_cluster_scores,
+    metric_plan,
+    trustworthiness_coef,
+)
 from ml_workbench.rules.split import cv_strategy
 from ml_workbench.rules.staleness import mark_downstream_stale
 from ml_workbench.rules.training import leaderboard_stats, log_fields
@@ -114,6 +126,12 @@ def _estimator_factory(spec: ModelSpec, task_type: str) -> Any:
         return RandomForestClassifier if classifier else RandomForestRegressor
     if spec.id == "hist_gradient_boosting":
         return HistGradientBoostingClassifier if classifier else HistGradientBoostingRegressor
+    if spec.id == "kmeans":
+        return KMeans
+    if spec.id == "pca":
+        return PCA
+    if spec.id == "isolation_forest":
+        return IsolationForest
     raise TrainingError(f"model '{spec.id}' has no training implementation yet")
 
 
@@ -123,6 +141,8 @@ def _accepts_random_state(spec: ModelSpec) -> bool:
         "decision_tree",
         "random_forest",
         "hist_gradient_boosting",
+        "kmeans",
+        "isolation_forest",
     }
 
 
@@ -140,6 +160,11 @@ def _translate_params(spec: ModelSpec, params: dict[str, object]) -> dict[str, A
     if spec.id == "hist_gradient_boosting" and cleaned.get("early_stopping_rounds") is not None:
         cleaned["early_stopping"] = True
         cleaned["n_iter_no_change"] = cleaned.pop("early_stopping_rounds")
+    if spec.id == "pca":
+        # n_components wins; otherwise variance_target selects a variance-retaining PCA.
+        if cleaned.get("n_components") is None and cleaned.get("variance_target") is not None:
+            cleaned["n_components"] = float(cleaned["variance_target"])
+        cleaned.pop("variance_target", None)
     return cleaned
 
 
@@ -250,7 +275,9 @@ def _make_splitter(task_type: str, frame: pd.DataFrame, task: Any, n_splits: int
 
 def _target_stats(state: ProjectState, task_type: str) -> tuple[float | None, float]:
     frame, task = state.frame, state.task
-    assert frame is not None and task is not None and task.target is not None
+    assert frame is not None and task is not None
+    if task.target is None:
+        return None, 0.0
     target = pd.to_numeric(frame[task.target], errors="coerce").dropna()
     if task_type in CLASSIFICATION_TASK_TYPES:
         counts = frame[task.target].value_counts(dropna=True)
@@ -320,6 +347,112 @@ def _cv_scores(
     return raw_metrics, fold_scores
 
 
+def _binary_outlier_labels(labels: Any) -> np.ndarray:
+    """Coerce anomaly evaluation labels to inlier/outlier (nonzero means outlier)."""
+    binary = (np.asarray(labels) != 0).astype(int)
+    return np.asarray(binary)
+
+
+def _anomaly_decision(estimator: Any, x: np.ndarray) -> np.ndarray:
+    """Anomaly score (higher = more anomalous) for isolation-forest-style models."""
+    if hasattr(estimator, "decision_function"):
+        return -np.asarray(estimator.decision_function(x))
+    return -np.asarray(estimator.score_samples(x))
+
+
+def unsupervised_scores(task_type: str, estimator: Any, x: np.ndarray) -> dict[str, float]:
+    """METRIC-05/06/07: holdout scores for an unsupervised model fit on a fold."""
+    scores: dict[str, float] = {}
+    if task_type == "clustering":
+        labels = np.asarray(estimator.predict(x))
+        if len(np.unique(labels)) > 1 and len(x) >= 4:
+            try:
+                scores["silhouette"] = round(float(silhouette_score(x, labels)), 6)
+                scores["davies_bouldin"] = round(float(davies_bouldin_score(x, labels)), 6)
+                scores["calinski_harabasz"] = round(float(calinski_harabasz_score(x, labels)), 6)
+            except ValueError:
+                pass
+    elif task_type == "dimensionality_reduction":
+        embedding = np.asarray(estimator.transform(x))
+        explained = float(np.sum(getattr(estimator, "explained_variance_ratio_", [0.0])))
+        scores["explained_variance"] = round(explained, 6)
+        if hasattr(estimator, "inverse_transform"):
+            reconstructed = np.asarray(estimator.inverse_transform(embedding))
+            scores["reconstruction_error"] = round(float(np.mean((x - reconstructed) ** 2)), 6)
+            if embedding.shape[1] < x.shape[1]:
+                scores["trustworthiness"] = trustworthiness_coef(x, embedding, n_neighbors=5)
+    elif task_type == "anomaly_detection":
+        decision = _anomaly_decision(estimator, x)
+        scores["score_distribution"] = round(float(np.mean(decision)), 6)
+    return scores
+
+
+def _unsupervised_cv_scores(
+    state: ProjectState,
+    spec: ModelSpec,
+    estimator_factory: Any,
+    plan: MetricPlan,
+    choices: dict[str, Any],
+    seed: int,
+) -> tuple[list[dict[str, float]], list[FoldScore]]:
+    frame, task = state.frame, state.task
+    assert frame is not None and task is not None
+    task_type = task.task_type
+    has_labels = task.eval_labels is not None
+    splitter = _make_splitter(task_type, frame, task, n_splits=5, seed=seed)
+    fold_scores: list[FoldScore] = []
+    raw_metrics: list[dict[str, float]] = []
+    for fold, (train_idx, test_idx) in enumerate(splitter):
+        train_idx = np.asarray(train_idx)
+        test_idx = np.asarray(test_idx)
+        if len(train_idx) == 0 or len(test_idx) == 0:
+            continue
+        fold_encoder = choices.get("encoder") or "ordinal"
+        reporter = build_pipeline(
+            frame,
+            train_idx,
+            task,
+            encoder=fold_encoder,
+            scaler=choices.get("scaler"),
+        )
+        estimator = estimator_factory
+        x_train = reporter.pipeline.transform(frame.iloc[train_idx])
+        x_test = reporter.pipeline.transform(frame.iloc[test_idx])
+        estimator.fit(x_train)
+        val_metrics = unsupervised_scores(task_type, estimator, x_test)
+        labels_true: Any = None
+        if has_labels:
+            labels_true = np.asarray(frame[task.eval_labels].iloc[test_idx])
+            if task_type == "clustering":
+                val_metrics.update(labeled_cluster_scores(labels_true, estimator.predict(x_test)))
+            elif task_type == "anomaly_detection":
+                val_metrics.update(
+                    anomaly_labeled_scores(
+                        _binary_outlier_labels(labels_true), _anomaly_decision(estimator, x_test)
+                    )
+                )
+        if not math.isfinite(val_metrics.get(plan.primary, float("nan"))):
+            # A fold whose primary metric is NaN (e.g. no outlier to label) is not usable.
+            continue
+        train_metrics = unsupervised_scores(task_type, estimator, x_train)
+        if has_labels and task_type == "clustering":
+            labels_train = np.asarray(frame[task.eval_labels].iloc[train_idx])
+            train_metrics.update(labeled_cluster_scores(labels_train, estimator.predict(x_train)))
+        fold_scores.append(
+            FoldScore(
+                fold=fold,
+                train_metric=train_metrics.get(plan.primary, float("nan")),
+                val_metric=val_metrics.get(plan.primary, float("nan")),
+                metrics=val_metrics,
+            )
+        )
+        fold_row = dict(val_metrics)
+        fold_row["training_metric"] = train_metrics.get(plan.primary, float("nan"))
+        fold_row["fold"] = fold
+        raw_metrics.append(fold_row)
+    return raw_metrics, fold_scores
+
+
 def new_run_id() -> str:
     return f"run_{secrets.token_hex(4)}"
 
@@ -346,7 +479,7 @@ def _fit_final_artifact(
     seed: int,
 ) -> Path:
     frame, task = state.frame, state.task
-    assert frame is not None and task is not None and task.target is not None
+    assert frame is not None and task is not None
     split_indices = _read_split_indices(workspace, state)
     train_idx = split_indices["train"]
     if len(train_idx) == 0:
@@ -359,14 +492,24 @@ def _fit_final_artifact(
         scaler=choices.get("scaler"),
     )
     target_transform: object = None
-    if task.task_type == "regression" and choices.get("target_transform") is not None:
+    y_to_fit: object = None
+    if (
+        task.learning_type == "supervised"
+        and task.task_type == "regression"
+        and choices.get("target_transform") is not None
+        and task.target is not None
+    ):
         y_to_fit, target_transform = apply_target_transform(
             frame[task.target].iloc[train_idx], str(choices["target_transform"])
         )
-    else:
+    elif task.learning_type == "supervised" and task.target is not None:
         y_to_fit = frame[task.target].iloc[train_idx]
     combined = Pipeline([("preprocess", reporter.pipeline), ("model", estimator)])
-    combined.fit(frame.iloc[train_idx], np.asarray(y_to_fit))
+    if task.learning_type == "unsupervised":
+        combined.fit(frame.iloc[train_idx])
+    else:
+        assert y_to_fit is not None
+        combined.fit(frame.iloc[train_idx], np.asarray(y_to_fit))
     run_dir = workspace.run_dir(run_id)
     run_dir.mkdir(parents=True, exist_ok=True)
     artifact = run_dir / "pipeline.joblib"
@@ -401,8 +544,13 @@ def train_model(
     task_type = task.task_type
     choices = _preprocessing_choices(state)
     minority_fraction, target_skew = _target_stats(state, task_type)
-    plan = metric_plan(task_type, minority_fraction=minority_fraction, target_skew=target_skew)
-    if (
+    plan = metric_plan(
+        task_type,
+        minority_fraction=minority_fraction,
+        target_skew=target_skew,
+        labeled=(task.learning_type == "unsupervised" and task.eval_labels is not None),
+    )
+    if task.learning_type == "supervised" and (
         minority_fraction is not None
         and minority_fraction < 0.2
         and not spec.flags.get("has_proba")
@@ -412,7 +560,12 @@ def train_model(
             f"'{spec.id}' has no probabilities"
         )
     estimator = build_estimator(spec, params, task_type, run_seed)
-    raw_metrics, fold_scores = _cv_scores(state, spec, estimator, plan, choices, run_seed)
+    if task.learning_type == "unsupervised":
+        raw_metrics, fold_scores = _unsupervised_cv_scores(
+            state, spec, estimator, plan, choices, run_seed
+        )
+    else:
+        raw_metrics, fold_scores = _cv_scores(state, spec, estimator, plan, choices, run_seed)
     if not fold_scores:
         raise TrainingError("cross-validation produced no usable folds")
     stats = leaderboard_stats(raw_metrics, plan.primary)

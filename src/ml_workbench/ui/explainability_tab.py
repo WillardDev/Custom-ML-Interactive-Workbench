@@ -92,6 +92,59 @@ def _render_report(report: Any) -> None:
                 st.caption(panel["note"])
         elif name == "pdp_ice":
             _render_pdp(panel)
+        elif name == "centroid_heatmap":
+            st.markdown("##### Cluster centroids (EXPL-06)")
+            st.dataframe(pd.DataFrame(panel["table"]), use_container_width=True)
+            if panel.get("note"):
+                st.caption(panel["note"])
+        elif name == "anova":
+            st.markdown("##### Per-feature F-ratio across clusters (EXPL-06)")
+            st.dataframe(pd.DataFrame(panel["table"]), use_container_width=True)
+        elif name == "surrogate_tree":
+            st.markdown("##### Surrogate decision tree importances (EXPL-06)")
+            st.dataframe(pd.DataFrame(panel["table"]).round(4), use_container_width=True)
+            if panel.get("bias_note"):
+                st.caption(panel["bias_note"])
+        elif name == "personas":
+            st.markdown("##### Cluster personas (EXPL-06)")
+            for persona in panel["personas"]:
+                with st.expander(f"Cluster {persona['cluster']} · {persona['size']} rows"):
+                    st.dataframe(pd.DataFrame(persona["top_features"]), use_container_width=True)
+        elif name == "loadings_table":
+            st.markdown("##### Component loadings (EXPL-07)")
+            st.dataframe(pd.DataFrame(panel["table"]), use_container_width=True)
+            if panel.get("note"):
+                st.caption(panel["note"])
+        elif name == "variance_explained":
+            explained = panel.get("explained") or []
+            st.markdown("##### Explained variance ratio (EXPL-07)")
+            fig = go.Figure(go.Bar(x=list(range(1, len(explained) + 1)), y=explained))
+            fig.update_layout(xaxis_title="Component", yaxis_title="Explained variance ratio")
+            st.plotly_chart(fig, use_container_width=True)
+        elif name == "biplot_coordinates":
+            st.markdown("##### Feature loading biplot — PC1 vs PC2 (EXPL-07)")
+            rows = panel["table"]
+            fig = go.Figure(
+                go.Scatter(
+                    x=[row["x"] for row in rows],
+                    y=[row["y"] for row in rows],
+                    mode="markers+text",
+                    text=[row["feature"] for row in rows],
+                    textposition="top center",
+                )
+            )
+            fig.add_hline(y=0.0, line_dash="dot")
+            fig.add_vline(x=0.0, line_dash="dot")
+            fig.update_layout(xaxis_title="PC1 loading", yaxis_title="PC2 loading")
+            st.plotly_chart(fig, use_container_width=True)
+        elif name == "reconstruction_error_per_feature":
+            st.markdown("##### Reconstruction error per feature (EXPL-07)")
+            st.dataframe(pd.DataFrame(panel["table"]).round(4), use_container_width=True)
+        elif name == "per_feature_deviation":
+            st.markdown("##### Flagged-row feature deviation (EXPL-08)")
+            st.dataframe(pd.DataFrame(panel["table"]).round(4), use_container_width=True)
+            if panel.get("note"):
+                st.caption(panel["note"])
 
     if report.warnings:
         for warning in report.warnings:

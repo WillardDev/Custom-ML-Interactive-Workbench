@@ -5,7 +5,11 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
-from ml_workbench.services.outcome_service import OutcomeError, build_supervised_outcome
+from ml_workbench.services.outcome_service import (
+    OutcomeError,
+    build_supervised_outcome,
+    build_unsupervised_outcome,
+)
 from ml_workbench.services.report_service import build_report
 from ml_workbench.services.workspace import Workspace
 from ml_workbench.state import ProjectState
@@ -26,6 +30,7 @@ def render_outcome_tab(state: ProjectState, workspace: Workspace) -> None:
         format_func=lambda run_id: _format_model(trained, run_id),
         key="outcome_model",
     )
+    supervised = state.task.learning_type == "supervised"
     threshold = st.slider(
         "Decision threshold",
         0.0,
@@ -33,14 +38,23 @@ def render_outcome_tab(state: ProjectState, workspace: Workspace) -> None:
         0.5,
         key="outcome_threshold",
         help="reuses the Prediction tab threshold when set",
+        disabled=not supervised,
     )
-    refit = st.checkbox("Refit the pipeline on all data (OUT-01)", key="outcome_refit")
+    refit = st.checkbox(
+        "Refit the pipeline on all data (OUT-01)",
+        key="outcome_refit",
+        value=False,
+        disabled=not supervised,
+    )
 
     if st.button("Build outcome, report and script", key="outcome_build", type="primary"):
         try:
-            result = build_supervised_outcome(
-                state, workspace, run_id, threshold=threshold, refit_on_all=refit
-            )
+            if supervised:
+                result = build_supervised_outcome(
+                    state, workspace, run_id, threshold=threshold, refit_on_all=refit
+                )
+            else:
+                result = build_unsupervised_outcome(state, workspace, run_id)
             report = build_report(state, workspace, run_id, result.files, threshold=threshold)
         except OutcomeError as exc:
             st.error(str(exc))
@@ -61,7 +75,7 @@ def render_outcome_tab(state: ProjectState, workspace: Workspace) -> None:
         )
         return
 
-    st.subheader("Deliverables (OUT-01)")
+    st.subheader("Deliverables (OUT-01..04)")
     st.table(pd.DataFrame({"file": payload["files"]}))
     st.subheader("Report bundle (EXPORT-01)")
     st.table(pd.DataFrame({"file": [payload["report"], payload["script"], payload["manifest"]]}))
@@ -71,10 +85,22 @@ def render_outcome_tab(state: ProjectState, workspace: Workspace) -> None:
         st.markdown("##### Model card")
         st.json(model_card.read_text(), expanded=False)
 
-    predictions = workspace.outcome_dir / "predictions.csv"
-    if predictions.is_file():
+    predictions_path = workspace.outcome_dir / "predictions.csv"
+    if predictions_path.is_file():
         st.markdown("##### Predictions preview")
-        st.dataframe(pd.read_csv(predictions).head(20), use_container_width=True)
+        st.dataframe(
+            pd.read_csv(workspace.outcome_dir / "predictions.csv").head(20),
+            use_container_width=True,
+        )
+    for name, label in (
+        ("clusters.csv", "Clusters preview"),
+        ("embeddings.csv", "Embeddings preview"),
+        ("flagged.csv", "Flagged rows preview"),
+    ):
+        path = workspace.outcome_dir / name
+        if path.is_file():
+            st.markdown(f"##### {label}")
+            st.dataframe(pd.read_csv(path).head(20), use_container_width=True)
 
 
 def _format_model(trained: list[Any], run_id: str) -> str:

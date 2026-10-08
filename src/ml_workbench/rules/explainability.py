@@ -77,6 +77,41 @@ def supervised_explanation_panels() -> dict[str, list[str]]:
     }
 
 
+def clustering_explanation_panels() -> dict[str, list[str]]:
+    """EXPL-06: clustering explains clusters with centroids, ANOVA and a surrogate."""
+    return {
+        "cluster": ["centroid_heatmap", "anova_per_feature"],
+        "surrogate": ["nearest_centroid_assign", "surrogate_tree", "personas"],
+    }
+
+
+def embedding_explanation_panels() -> dict[str, list[str]]:
+    """EXPL-07: dim reduction explains embeddings with loadings and a biplot."""
+    return {
+        "projection": ["loadings_table", "biplot_coordinates"],
+        "quality": ["reconstruction_error_per_feature"],
+    }
+
+
+def anomaly_explanation_panels() -> dict[str, list[str]]:
+    """EXPL-08: anomaly explains outliers via SHAP and per-feature deviation."""
+    return {
+        "global": ["tree_shap_importances"],
+        "local": ["per_feature_deviation"],
+    }
+
+
+def unsupervised_explanation_panels(task_type: str) -> dict[str, list[str]]:
+    """EXPL-06..08: the explanation panel set for an unsupervised task."""
+    if task_type == "clustering":
+        return clustering_explanation_panels()
+    if task_type == "dimensionality_reduction":
+        return embedding_explanation_panels()
+    if task_type == "anomaly_detection":
+        return anomaly_explanation_panels()
+    return {}
+
+
 def auto_explain_warnings(
     *,
     importance_spread: bool = False,

@@ -10,15 +10,23 @@ import numpy as np
 import pandas as pd
 
 from ml_workbench.registry import load_registry
+from ml_workbench.rules.metrics import (
+    anomaly_labeled_scores,
+    labeled_cluster_scores,
+    metric_plan,
+)
 from ml_workbench.rules.prediction import calibration_curve, threshold_metrics
 from ml_workbench.services.model_cache import ModelCache
 from ml_workbench.services.training_service import (
+    _anomaly_decision,
+    _binary_outlier_labels,
     classification_scores,
     inverse_target,
     regression_scores,
+    unsupervised_scores,
 )
 from ml_workbench.services.workspace import Workspace
-from ml_workbench.state import ModelRun, ProjectState
+from ml_workbench.state import ModelRun, ProjectState, feature_columns
 
 
 class PredictionError(ValueError):
@@ -33,8 +41,8 @@ class PredictionResult:
 
 @dataclass(frozen=True)
 class TestEvaluation:
-    y_true: np.ndarray
-    y_pred: np.ndarray
+    y_true: np.ndarray | None
+    y_pred: np.ndarray | None
     y_proba: np.ndarray | None
     scores: dict[str, float]
 
@@ -82,19 +90,28 @@ def predict_frame(
     cache: ModelCache | None = None,
 ) -> PredictionResult:
     run, spec = _run_spec(state, run_id)
-    if not spec.flags.get("has_predict"):
-        raise PredictionError(
-            f"'{spec.id}' cannot assign new rows (WARN-01/PRED-04): train a surrogate "
-            f"nearest-centroid model instead"
-        )
     pipeline = get_pipeline(workspace, run_id, cache)
-    feature_columns = list(frame.columns)
-    y_pred = np.asarray(pipeline.predict(frame[feature_columns]))
+    task = state.task
+    features = feature_columns(task, frame) if task is not None else list(frame.columns)
     result = frame.copy()
+    has_predict = bool(spec.flags.get("has_predict"))
+    has_transform = bool(spec.flags.get("has_transform"))
+    if has_transform:
+        transformed = np.asarray(pipeline.transform(frame[features]))
+        for k in range(transformed.shape[1]):
+            result[f"pc{k + 1}"] = transformed[:, k]
+    if not has_predict:
+        if not has_transform:
+            raise PredictionError(
+                f"'{spec.id}' can neither assign nor project new rows (PRED-04/PRED-05): "
+                f"train a surrogate nearest-centroid model instead"
+            )
+        return PredictionResult(df=result, has_proba=False)
+    y_pred = np.asarray(pipeline.predict(frame[features]))
     result["prediction"] = y_pred
     has_proba = bool(spec.flags.get("has_proba"))
     if has_proba:
-        proba = np.asarray(pipeline.predict_proba(frame[feature_columns]))
+        proba = np.asarray(pipeline.predict_proba(frame[features]))
         classes = getattr(pipeline.named_steps["model"], "classes_", [])
         for index, label in enumerate(classes):
             result[f"p_{label}"] = proba[:, index]
@@ -127,6 +144,56 @@ def predict_single(
     return output
 
 
+def _test_indices(state: ProjectState) -> np.ndarray:
+    if state.split is None or state.split.indices_path is None:
+        raise PredictionError("no test split saved — run Preprocessing")
+    indices = json.loads(Path(state.split.indices_path).read_text())
+    test_idx = np.asarray(indices["test"], dtype=int)
+    if len(test_idx) == 0:
+        raise PredictionError("the split strategy produced no test rows")
+    return test_idx
+
+
+def _transform_matrix(pipeline: Any, frame: pd.DataFrame, features: list[str]) -> np.ndarray:
+    preprocess = pipeline.named_steps["preprocess"]
+    return np.asarray(preprocess.transform(frame[features]))
+
+
+def _evaluate_unsupervised(
+    state: ProjectState, workspace: Workspace, run_id: str, *, cache: ModelCache | None = None
+) -> TestEvaluation:
+    assert state.frame is not None and state.task is not None
+    task = state.task
+    test_idx = _test_indices(state)
+    run, spec = _run_spec(state, run_id)
+    pipeline = get_pipeline(workspace, run_id, cache)
+    test_frame = state.frame.iloc[test_idx]
+    features = feature_columns(task, state.frame)
+    x_test = _transform_matrix(pipeline, test_frame, features)
+    model = pipeline.named_steps["model"]
+    scores = unsupervised_scores(task.task_type, model, x_test)
+    y_true: np.ndarray | None = None
+    y_pred: np.ndarray | None = None
+    if task.eval_labels is not None:
+        y_true = np.asarray(state.frame[task.eval_labels].iloc[test_idx])
+    plan = metric_plan(task.task_type, labeled=task.eval_labels is not None)
+    if task.task_type == "clustering":
+        y_pred = np.asarray(model.predict(x_test))
+        if y_true is not None:
+            scores.update(labeled_cluster_scores(y_true, y_pred))
+    elif task.task_type == "anomaly_detection":
+        decision = _anomaly_decision(model, x_test)
+        y_pred = (decision > 0.0).astype(int)
+        if y_true is not None:
+            scores.update(anomaly_labeled_scores(_binary_outlier_labels(y_true), decision))
+    filtered = {
+        name: value
+        for name, value in sorted(scores.items())
+        if name in plan.metrics or name == plan.primary
+    }
+    return TestEvaluation(y_true=y_true, y_pred=y_pred, y_proba=None, scores=filtered)
+
+
 def evaluate_test(
     state: ProjectState,
     workspace: Workspace,
@@ -134,17 +201,18 @@ def evaluate_test(
     *,
     cache: ModelCache | None = None,
 ) -> TestEvaluation:
-    assert state.frame is not None and state.task is not None and state.task.target is not None
-    if state.split is None or state.split.indices_path is None:
-        raise PredictionError("no test split saved — run Preprocessing")
-    indices = json.loads(Path(state.split.indices_path).read_text())
-    test_idx = np.asarray(indices["test"], dtype=int)
-    if len(test_idx) == 0:
-        raise PredictionError("the split strategy produced no test rows")
+    if state.frame is None:
+        raise PredictionError("no dataset loaded")
+    if state.task is None:
+        raise PredictionError("no task set — set a task in Data Insertion")
+    if state.task.learning_type == "unsupervised":
+        return _evaluate_unsupervised(state, workspace, run_id, cache=cache)
+    assert state.task.target is not None
+    test_idx = _test_indices(state)
     run, spec = _run_spec(state, run_id)
     pipeline = get_pipeline(workspace, run_id, cache)
     test_frame = state.frame.iloc[test_idx]
-    features = [column for column in test_frame.columns if column != state.task.target]
+    features = feature_columns(state.task, test_frame)
     y_true = np.asarray(state.frame[state.task.target].iloc[test_idx])
     y_pred = np.asarray(pipeline.predict(test_frame[features]))
     proba: np.ndarray | None = None

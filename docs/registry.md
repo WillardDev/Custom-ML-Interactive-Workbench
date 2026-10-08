@@ -34,6 +34,15 @@ behaviour is defined.
 | Anomaly detection | Isolation Forest, LOF, One-Class SVM, Elliptic Envelope, GMM density | Autoencoder reconstruction error, Deep SVDD | Phase 6 / Phase 7 |
 | Association rules | Apriori, FP-Growth | n/a | Phase 8 |
 
+Phase 6 implementation (`registry/models.yaml`, `enabled_phase: 6`):
+- `kmeans` — clustering, `family: centroid`, `has_predict`, `explain_method: surrogate`;
+  params `n_clusters` (default 8) and `n_init`.
+- `pca` — dimensionality reduction, `family: linear`, `has_transform`, `explain_method: loadings`;
+  params `n_components` (nullable) or `variance_target` (0.95) — the training step resolves one
+  component count from the other.
+- `isolation_forest` — anomaly detection, `family: tree`, `has_predict`, `explain_method: tree_shap`;
+  params `n_estimators` (200), `contamination` (0.001–0.5), `max_features` (1.0).
+
 ## YAML entry schema (`registry/models.yaml`)
 
 ```yaml

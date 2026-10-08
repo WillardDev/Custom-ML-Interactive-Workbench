@@ -9,6 +9,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from sklearn.inspection import partial_dependence, permutation_importance
+from sklearn.tree import DecisionTreeClassifier
 
 from ml_workbench.registry import ModelSpec, load_registry
 from ml_workbench.rules.explainability import (
@@ -21,7 +22,7 @@ from ml_workbench.rules.performance import disk_cache_key
 from ml_workbench.services.model_cache import ModelCache
 from ml_workbench.services.prediction_service import get_pipeline
 from ml_workbench.services.workspace import Workspace, utc_now
-from ml_workbench.state import ProjectState
+from ml_workbench.state import ProjectState, feature_columns
 
 
 class ExplainError(ValueError):
@@ -58,9 +59,11 @@ def explain_model(
     on_progress: ProgressUpdate | None = None,
     force_recompute: bool = False,
 ) -> ExplanationReport:
-    """EXPL-01/02/03/05/10/11: dispatch explanations, writing a disk cache."""
-    if state.frame is None or state.task is None or state.task.target is None:
+    """EXPL-01/02/03/05/06/07/08/10/11: dispatch explanations, writing a disk cache."""
+    if state.frame is None or state.task is None:
         raise ExplainError("load a dataset and set a task first")
+    if state.task.learning_type == "supervised" and state.task.target is None:
+        raise ExplainError("a supervised task needs a target column")
     run = next((model for model in state.models if model.run_id == run_id), None)
     if run is None:
         raise ExplainError(f"unknown run '{run_id}' — train a model first")
@@ -85,22 +88,30 @@ def explain_model(
 
     if on_progress:
         on_progress(0.05, "sampling background rows")
-    frame, target = state.frame, state.task.target
-    features = [column for column in frame.columns if column != target]
+    frame, task = state.frame, state.task
+    if task.learning_type == "unsupervised":
+        features = list(feature_columns(task, frame))
+    else:
+        features = [column for column in frame.columns if column != task.target]
     x = frame[features]
     if len(x) > BACKGROUND_MAX:
         x = x.sample(n=BACKGROUND_MAX, random_state=state.seed)
     background_rows = len(x)
-    y = frame[target].iloc[x.index]
     pipeline = get_pipeline(workspace, run_id, cache)
 
-    if on_progress:
-        on_progress(0.2, f"running {spec.flags.get('explain_method')} explanation")
-    method = _method_for(spec, x, y, pipeline, on_progress)
-
-    if on_progress:
-        on_progress(0.85, "building PDP / ICE probes")
-    panels, warnings = _explanations(spec, pipeline, features, x, y, method, background_rows, state)
+    if task.learning_type == "unsupervised":
+        method = _unsupervised_method(spec, task.task_type)
+        panels, warnings = _unsupervised_explanations(
+            task.task_type, pipeline, list(x.columns), x, state
+        )
+    else:
+        if on_progress:
+            on_progress(0.2, f"running {spec.flags.get('explain_method')} explanation")
+        y = frame[task.target].iloc[x.index]
+        method = _method_for(spec, x, y, pipeline, on_progress)
+        panels, warnings = _explanations(
+            spec, pipeline, list(x.columns), x, y, method, background_rows, state
+        )
 
     workspace.ensure()
     payload = {
@@ -140,6 +151,246 @@ def _method_for(
     if desired == "kernel_shap":
         return "kernel_shap" if shap_available() else "permutation_importance"
     return "permutation_importance" if desired in {"gradient", "surrogate", "loadings"} else desired
+
+
+def _unsupervised_method(spec: ModelSpec, task_type: str) -> str:
+    if task_type == "clustering":
+        return "surrogate"
+    if task_type == "dimensionality_reduction":
+        return "loadings"
+    desired = str(spec.flags.get("explain_method"))
+    return "tree_shap" if desired == "tree_shap" and shap_available() else "tree_importances"
+
+
+def _unsupervised_explanations(
+    task_type: str,
+    pipeline: Any,
+    feature_names: list[str],
+    x: pd.DataFrame,
+    state: ProjectState,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    preprocess = pipeline.named_steps.get("preprocess")
+    x_scaled = (
+        np.asarray(preprocess.transform(x))
+        if preprocess is not None and hasattr(preprocess, "transform")
+        else np.asarray(x)
+    )
+    if task_type == "clustering":
+        panels = _clustering_explanation_panels(pipeline, x, x_scaled, feature_names, state)
+    elif task_type == "dimensionality_reduction":
+        panels = _dimred_explanation_panels(pipeline, x_scaled, feature_names)
+    else:
+        panels = _anomaly_explanation_panels(pipeline, x, x_scaled, feature_names)
+    warnings = list(auto_explain_warnings(importance_spread=False, on_sample=True))
+    return panels, warnings
+
+
+def _clustering_explanation_panels(
+    pipeline: Any,
+    x: pd.DataFrame,
+    x_scaled: np.ndarray,
+    feature_names: list[str],
+    state: ProjectState,
+) -> list[dict[str, Any]]:
+    model = pipeline.named_steps["model"]
+    labels = np.asarray(model.predict(x_scaled))
+    clusters = sorted(int(value) for value in np.unique(labels))
+    frame = x.reset_index(drop=True)
+    frame["_cluster_"] = labels
+    if len(clusters) > 1:
+        centroids = frame.groupby("_cluster_", observed=True)[feature_names].mean(numeric_only=True)
+        centroid_rows = [
+            {"cluster": cluster_index, **row.round(4).to_dict()}
+            for cluster_index, (_, row) in enumerate(centroids.iterrows())
+        ]
+    else:
+        centroid_rows = [
+            {
+                "cluster": 0,
+                **{feature: round(float(frame[feature].mean()), 4) for feature in feature_names},
+            }
+        ]
+    table = pd.DataFrame(centroid_rows)
+    anova = _anova_f_ratios(frame, labels, clusters, feature_names)
+    personas = _cluster_personas(frame, labels, clusters, feature_names)
+    tree = DecisionTreeClassifier(max_depth=4, random_state=state.seed)
+    tree.fit(np.asarray(frame[feature_names]), labels)
+    surrogate_table = [
+        {"feature": feature, "importance": float(importance)}
+        for feature, importance in zip(feature_names, tree.feature_importances_, strict=False)
+    ]
+    return [
+        {
+            "panel": "centroid_heatmap",
+            "table": (table.round(4) if not table.empty else table).to_dict("records"),
+            "note": "per-cluster feature means — interpret with care after preprocessing",
+        },
+        {"panel": "anova", "table": anova},
+        {
+            "panel": "surrogate_tree",
+            "table": surrogate_table,
+            **tree_explanation(shap_available=shap_available()),
+        },
+        {"panel": "personas", "personas": personas},
+    ]
+
+
+def _anova_f_ratios(
+    frame: pd.DataFrame, labels: np.ndarray, clusters: list[int], features: list[str]
+) -> list[dict[str, Any]]:
+    if len(clusters) < 2:
+        return [{"feature": feature, "f_ratio": None} for feature in features]
+    rows: list[dict[str, Any]] = []
+    for feature in features:
+        column = frame[feature].to_numpy(dtype=float)
+        groups = [column[labels == cluster_index] for cluster_index in clusters]
+        if any(len(group) < 2 for group in groups):
+            rows.append({"feature": feature, "f_ratio": None})
+            continue
+        grand = float(column.mean())
+        between = sum(len(group) * (float(group.mean()) - grand) ** 2 for group in groups)
+        within = sum(float(((group - group.mean()) ** 2).sum()) for group in groups)
+        within_df = len(column) - len(clusters)
+        if within <= 0 or within_df <= 0:
+            rows.append({"feature": feature, "f_ratio": None})
+            continue
+        rows.append(
+            {
+                "feature": feature,
+                "f_ratio": round((between / (len(clusters) - 1)) / (within / within_df), 4),
+            }
+        )
+    return rows
+
+
+def _cluster_personas(
+    frame: pd.DataFrame, labels: np.ndarray, clusters: list[int], features: list[str]
+) -> list[dict[str, Any]]:
+    overall = frame[features].mean()
+    personas = []
+    for cluster_index in clusters:
+        members = frame.loc[frame["_cluster_"] == cluster_index, features]
+        centroid = members.mean()
+        deviations = (centroid - overall).abs().sort_values(ascending=False)
+        top = [
+            {
+                "feature": str(feature),
+                "mean": round(float(centroid[feature]), 4),
+                "deviation": round(float(centroid[feature] - overall[feature]), 4),
+            }
+            for feature in deviations.index[:3]
+        ]
+        personas.append(
+            {
+                "cluster": int(cluster_index),
+                "size": int(len(members)),
+                "top_features": top,
+            }
+        )
+    return personas
+
+
+def _dimred_explanation_panels(
+    pipeline: Any, x_scaled: np.ndarray, feature_names: list[str]
+) -> list[dict[str, Any]]:
+    model = pipeline.named_steps["model"]
+    components = np.asarray(getattr(model, "components_", []))
+    rows = []
+    for row_index in range(components.shape[0]):
+        rows.append(
+            {
+                "pc": f"PC{row_index + 1}",
+                **{
+                    feature: round(float(value), 4)
+                    for feature, value in zip(feature_names, components[row_index], strict=False)
+                },
+            }
+        )
+    panels: list[dict[str, Any]] = [
+        {"panel": "loadings_table", "table": rows, "note": "component loadings per feature"}
+    ]
+    explained = getattr(model, "explained_variance_ratio_", [])
+    if len(explained):
+        panels.append(
+            {
+                "panel": "variance_explained",
+                "explained": [round(float(value), 4) for value in explained],
+            }
+        )
+    biplot: list[dict[str, Any]] = []
+    if components.shape[0] >= 2:
+        for feature, x_coord, y_coord in zip(
+            feature_names, components[0], components[1], strict=False
+        ):
+            biplot.append(
+                {
+                    "feature": feature,
+                    "x": round(float(x_coord), 4),
+                    "y": round(float(y_coord), 4),
+                }
+            )
+    if biplot:
+        panels.append({"panel": "biplot_coordinates", "table": biplot})
+    if hasattr(model, "inverse_transform"):
+        embedding = np.asarray(model.transform(x_scaled))
+        reconstructed = np.asarray(model.inverse_transform(embedding))
+        per_feature = ((x_scaled - reconstructed) ** 2).mean(axis=0)
+        panels.append(
+            {
+                "panel": "reconstruction_error_per_feature",
+                "table": [
+                    {"feature": feature, "mean_squared_error": round(float(value), 4)}
+                    for feature, value in zip(feature_names, per_feature, strict=False)
+                ],
+            }
+        )
+    return panels
+
+
+def _anomaly_explanation_panels(
+    pipeline: Any, x: pd.DataFrame, x_scaled: np.ndarray, feature_names: list[str]
+) -> list[dict[str, Any]]:
+    model = pipeline.named_steps["model"]
+    panels: list[dict[str, Any]] = []
+    importances = np.asarray(getattr(model, "feature_importances_", []))
+    if len(importances) == len(feature_names):
+        panels.append(
+            {
+                "panel": "importances",
+                "method": "tree_shap" if shap_available() else "tree_importances",
+                "table": [
+                    {"feature": feature, "importance": float(importance)}
+                    for feature, importance in zip(feature_names, importances, strict=False)
+                ],
+                **tree_explanation(shap_available=shap_available()),
+            }
+        )
+    decision = np.asarray(model.decision_function(x_scaled))
+    flagged = x.loc[decision > 0.0]
+    deviation_rows: list[dict[str, Any]] = []
+    if len(flagged) > 0:
+        overall_mean = x[feature_names].mean()
+        overall_std = x[feature_names].std(ddof=0).replace(0.0, 1.0)
+        flagged_mean = flagged[feature_names].mean()
+        deviations = (flagged_mean - overall_mean) / overall_std
+        for feature in deviations.abs().sort_values(ascending=False).index[:10]:
+            deviation_rows.append(
+                {
+                    "feature": feature,
+                    "flagged_mean": round(float(flagged_mean[feature]), 4),
+                    "base_mean": round(float(overall_mean[feature]), 4),
+                    "deviation": round(float(deviations[feature]), 4),
+                }
+            )
+    if deviation_rows:
+        panels.append(
+            {
+                "panel": "per_feature_deviation",
+                "table": deviation_rows,
+                "note": "feature z-scores of flagged rows relative to the base population",
+            }
+        )
+    return panels
 
 
 def _explanations(

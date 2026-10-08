@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
-from ml_workbench.rules.metrics import metric_plan
+from ml_workbench.rules.metrics import (
+    anomaly_labeled_scores,
+    labeled_cluster_scores,
+    metric_plan,
+    trustworthiness_coef,
+)
 
 
 def test_metrics_balanced_classification() -> None:
@@ -34,19 +40,59 @@ def test_metrics_time_series() -> None:
     raise NotImplementedError("docs/rules.md METRIC-04")
 
 
-@pytest.mark.skip(reason="clustering metrics arrive in Phase 6 (docs/rules.md METRIC-05)")
 def test_metrics_clustering() -> None:
-    raise NotImplementedError("docs/rules.md METRIC-05")
+    plan = metric_plan("clustering")
+    assert plan.primary == "silhouette"
+    assert set(plan.metrics) == {"silhouette", "davies_bouldin", "calinski_harabasz"}
+    assert plan.rule_id == "METRIC-05"
+
+    labeled = metric_plan("clustering", labeled=True)
+    assert labeled.primary == "adjusted_rand"
+    assert set(labeled.metrics) == {"adjusted_rand", "nmi", "silhouette"}
+
+    labels_true = np.array([0, 0, 1, 1, 2, 2])
+    labels_pred = np.array([0, 0, 0, 1, 1, 1])
+    scores = labeled_cluster_scores(labels_true, labels_pred)
+    assert set(scores) == {"adjusted_rand", "nmi"}
+    assert -1.0 <= scores["adjusted_rand"] <= 1.0
 
 
-@pytest.mark.skip(reason="dim reduction metrics arrive in Phase 6 (docs/rules.md METRIC-06)")
 def test_metrics_dim_reduction() -> None:
-    raise NotImplementedError("docs/rules.md METRIC-06")
+    plan = metric_plan("dimensionality_reduction")
+    assert plan.primary == "explained_variance"
+    assert set(plan.metrics) == {
+        "explained_variance",
+        "reconstruction_error",
+        "trustworthiness",
+    }
+    assert plan.rule_id == "METRIC-06"
+
+    rng = np.random.default_rng(0)
+    high = rng.normal(size=(60, 5))
+    low = high[:, :2]
+    trustworthy = trustworthiness_coef(high, low, n_neighbors=5)
+    assert 0.0 <= trustworthy <= 1.0
 
 
-@pytest.mark.skip(reason="anomaly metrics arrive in Phase 6 (docs/rules.md METRIC-07)")
 def test_metrics_anomaly_labeled_vs_not() -> None:
-    raise NotImplementedError("docs/rules.md METRIC-07")
+    plan = metric_plan("anomaly_detection")
+    assert plan.primary == "score_distribution"
+    assert plan.metrics == ("score_distribution",)
+    assert plan.rule_id == "METRIC-07"
+
+    labeled = metric_plan("anomaly_detection", labeled=True)
+    assert labeled.primary == "roc_auc"
+    assert set(labeled.metrics) == {"roc_auc", "pr_auc"}
+
+    rng = np.random.default_rng(1)
+    labels = np.array([0] * 40 + [1] * 10)
+    scores = rng.normal(size=50) + labels
+    labeled_scores = anomaly_labeled_scores(labels, scores)
+    assert 0.0 < labeled_scores["roc_auc"] <= 1.0
+    assert 0.0 < labeled_scores["pr_auc"] <= 1.0
+
+    single_class = anomaly_labeled_scores(np.zeros(10), np.zeros(10))
+    assert np.isnan(single_class["roc_auc"])
 
 
 @pytest.mark.skip(reason="association-rule metrics arrive in Phase 7 (docs/rules.md METRIC-08)")

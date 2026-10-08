@@ -16,6 +16,7 @@ from sklearn.metrics import (
     precision_recall_fscore_support,
     roc_auc_score,
     roc_curve,
+    silhouette_samples,
 )
 
 from ml_workbench.rules.error_analysis import error_view_plan
@@ -23,7 +24,7 @@ from ml_workbench.rules.prediction import calibration_curve, threshold_metrics
 from ml_workbench.services.model_cache import ModelCache
 from ml_workbench.services.prediction_service import get_pipeline
 from ml_workbench.services.workspace import Workspace
-from ml_workbench.state import ProjectState
+from ml_workbench.state import ProjectState, feature_columns
 
 
 class ErrorAnalysisError(ValueError):
@@ -50,9 +51,13 @@ def error_views(
     *,
     cache: ModelCache | None = None,
 ) -> ErrorReport:
-    """ERR-01/02/03/07: task-specific error views on the held-out test split."""
-    if state.frame is None or state.task is None or state.task.target is None:
+    """ERR-01..07: task-specific error views on the held-out test split."""
+    if state.frame is None or state.task is None:
         raise ErrorAnalysisError("load a dataset and set a task first")
+    if state.task.learning_type == "unsupervised":
+        return _unsupervised_error_views(state, workspace, run_id, cache=cache)
+    if state.task.target is None:
+        raise ErrorAnalysisError("a supervised task needs a target column")
     if state.split is None or state.split.indices_path is None:
         raise ErrorAnalysisError("no test split saved — run Preprocessing first")
 
@@ -267,3 +272,183 @@ def _segment_slices(
             grouped = grouped.sort_values("mean", ascending=False).reset_index(drop=True)
             return grouped.rename(columns={"mean": "mean_abs_error", "count": "rows"})
     return None
+
+
+def _resolve_unsupervised_views(
+    report_payloads: list[dict[str, Any]], task_type: str
+) -> tuple[dict[str, Any], ...]:
+    """Order accessor payloads to match the ERR-04/05/06 view plan."""
+    positions = {plan["view"]: index for index, plan in enumerate(error_view_plan(task_type))}
+    ordered: list[dict[str, Any]] = [{} for _ in positions]
+    for payload in report_payloads:
+        name = str(payload["view"])
+        ordered[positions[name]] = payload
+    return tuple(ordered)
+
+
+def _clustering_error_payloads(x: np.ndarray, labels: np.ndarray) -> list[dict[str, Any]]:
+    counts = np.bincount(labels.astype(int), minlength=int(labels.max()) + 1)
+    sizes = [int(round(float(v))) for v in counts.tolist()]
+    ratio = round(float(max(sizes) / min(sizes)), 4) if len(sizes) > 1 and min(sizes) > 0 else None
+    if len(np.unique(labels)) > 1 and len(x) >= 4:
+        per_sample = silhouette_samples(x, labels)
+        table = pd.DataFrame({"row": np.arange(len(per_sample)), "silhouette": per_sample})
+        low = table[table["silhouette"] < 0.0].sort_values("silhouette")
+        low_points = low if len(low) else table.sort_values("silhouette")
+        payloads = []
+        payloads.append(
+            {
+                "view": "silhouette_per_sample",
+                "mean": round(float(np.mean(per_sample)), 4),
+                "values": [round(float(v), 4) for v in per_sample[:200].tolist()],
+            }
+        )
+        payloads.append(
+            {
+                "view": "low_silhouette_points",
+                "count": int((per_sample < 0.0).sum()),
+                "table": low_points.head(WORST_N).reset_index(drop=True),
+            }
+        )
+    else:
+        payloads = [
+            {"view": "silhouette_per_sample", "mean": float("nan"), "values": []},
+            {"view": "low_silhouette_points", "count": 0, "table": pd.DataFrame()},
+        ]
+    payloads.append(
+        {
+            "view": "cluster_size_imbalance",
+            "labels": list(range(len(sizes))),
+            "counts": sizes,
+            "max_min_ratio": ratio,
+        }
+    )
+    payloads.append(
+        {
+            "view": "stability_warning",
+            "warning": (
+                f"largest cluster is {ratio}x the smallest — consider re-centering or a different k"
+                if ratio is not None and ratio >= 2.0
+                else "cluster sizes are reasonably balanced"
+            ),
+        }
+    )
+    return payloads
+
+
+def _dimred_error_payloads(model: Any, x: np.ndarray) -> list[dict[str, Any]]:
+    if not hasattr(model, "inverse_transform"):
+        empty = pd.DataFrame(columns=["row", "reconstruction_error"])
+        return [
+            {"view": "reconstruction_error_per_row", "mean": float("nan"), "table": empty},
+            {"view": "poorly_embedded_points", "count": 0, "threshold": None},
+        ]
+    embedding = np.asarray(model.transform(x))
+    reconstructed = np.asarray(model.inverse_transform(embedding))
+    per_row = np.sqrt(((x - reconstructed) ** 2).sum(axis=1))
+    threshold = float(np.percentile(per_row, 80))
+    table = pd.DataFrame(
+        {"row": np.arange(len(per_row)), "reconstruction_error": per_row}
+    ).sort_values("reconstruction_error", ascending=False)
+    return [
+        {
+            "view": "reconstruction_error_per_row",
+            "mean": round(float(np.mean(per_row)), 4),
+            "table": table.head(WORST_N).reset_index(drop=True),
+        },
+        {
+            "view": "poorly_embedded_points",
+            "count": int((per_row > threshold).sum()),
+            "threshold": round(threshold, 4),
+        },
+    ]
+
+
+def _anomaly_error_payloads(decision: np.ndarray, score: pd.Series) -> list[dict[str, Any]]:
+    top = score.sort_values(ascending=False).head(WORST_N)
+    top_table = pd.DataFrame({"row": top.index.to_numpy(), "score": top.to_numpy()})
+    return [
+        {
+            "view": "score_distribution",
+            "mean": round(float(decision.mean()), 4),
+            "std": round(float(decision.std()), 4),
+            "flagged": int((decision > 0.0).sum()),
+        },
+        {
+            "view": "top_flagged_rows",
+            "count": int((decision > 0.0).sum()),
+            "quantiles": {
+                str(q): round(float(score.quantile(q)), 4) for q in (0.5, 0.9, 0.95, 0.99)
+            },
+            "table": top_table,
+        },
+    ]
+
+
+def _unsupervised_error_views(
+    state: ProjectState,
+    workspace: Workspace,
+    run_id: str,
+    *,
+    cache: ModelCache | None,
+) -> ErrorReport:
+    assert state.frame is not None and state.task is not None
+    task = state.task
+    if state.split is None or state.split.indices_path is None:
+        raise ErrorAnalysisError("no test split saved — run Preprocessing first")
+    indices = json.loads(Path(state.split.indices_path).read_text())
+    test_idx = np.asarray(indices["test"], dtype=int)
+    if len(test_idx) == 0:
+        raise ErrorAnalysisError(
+            "the split produced no test rows (add evaluation labels or split the data)"
+        )
+    pipeline = get_pipeline(workspace, run_id, cache)
+    test_frame = state.frame.iloc[test_idx].reset_index(drop=True)
+    features = list(feature_columns(task, state.frame))
+    x_test = np.asarray(pipeline.named_steps["preprocess"].transform(test_frame[features]))
+    model = pipeline.named_steps["model"]
+    predictions = test_frame.copy()
+    payloads: list[dict[str, Any]] = []
+    task_type = task.task_type
+    if task.eval_labels is not None:
+        predictions["true"] = np.asarray(state.frame[task.eval_labels].iloc[test_idx])
+    if task_type == "clustering":
+        labels = np.asarray(model.predict(x_test))
+        predictions["prediction"] = labels
+        payloads = _clustering_error_payloads(x_test, labels)
+    elif task_type == "dimensionality_reduction":
+        embedding = np.asarray(model.transform(x_test))
+        for k in range(embedding.shape[1]):
+            predictions[f"pc{k + 1}"] = embedding[:, k]
+        payloads = _dimred_error_payloads(model, x_test)
+    elif task_type == "anomaly_detection":
+        decision = np.asarray(model.decision_function(x_test))
+        predictions["score"] = decision
+        predictions["prediction"] = (decision > 0.0).astype(int)
+        payloads = _anomaly_error_payloads(decision, predictions["score"])
+        if task.eval_labels is not None:
+            binary = (predictions["true"].to_numpy() != 0).astype(int)
+            flag = (decision > 0.0).astype(int)
+            payloads.append(
+                {
+                    "view": "false_positives_negatives",
+                    "tp": int(((flag == 1) & (binary == 1)).sum()),
+                    "fp": int(((flag == 1) & (binary == 0)).sum()),
+                    "fn": int(((flag == 0) & (binary == 1)).sum()),
+                    "tn": int(((flag == 0) & (binary == 0)).sum()),
+                }
+            )
+    views = _resolve_unsupervised_views(payloads, task_type)
+    worst_n = (
+        predictions.sort_values(["score", "prediction"], ascending=False).head(WORST_N)
+        if "score" in predictions.columns
+        else predictions.head(WORST_N)
+    )
+    worst_n = worst_n.reset_index(drop=True)
+    return ErrorReport(
+        task_type=task_type,
+        views=views,
+        worst_n=worst_n,
+        segments=None,
+        predicted=predictions,
+    )

@@ -26,26 +26,32 @@ Design source: *ML Workbench: Software Documentation v1.0 — Architecture and t
 | Phase 3 — Preprocessing + EDA | **complete — exit criteria met** |
 | Phase 4 — Modelling, Training, Prediction | **complete — exit criteria met** |
 | Phase 5 — Error Analysis, Explainability, Outcome | **complete — exit criteria met** |
-| Phases 6–9 — Unsupervised, Neural, Advanced, Production | not started |
+| Phase 6 — Unsupervised (Clustering, Dim-Reduction, Anomaly) | **complete — exit criteria met** |
+| Phases 7–9 — Neural, Advanced, Production | not started |
 
 Current state: `docs/` and `registry/` hold the Phase 0 spec (124 rules, tab matrix, contracts);
 `src/` holds the foundation (project state, rules engine for gating/staleness, registry loader,
-Streamlit shell). Phases 2–5 are live: Data Insertion, Data Cleaning, Data Preprocessing, EDA,
+Streamlit shell). Phases 2–6 are live: Data Insertion, Data Cleaning, Data Preprocessing, EDA,
 Modelling, Training, Prediction, Error Analysis, Model Explainability, and Outcome tabs with
 versioned Parquet storage, schema reports, the step log with undo, task inference (TASK-01..03),
 cleaning rules (CLEAN-01..06), leakage-safe split/encode/scale preprocessing (SPLIT-01..09, ENC-*,
 SCALE-*, FEAT-*, DR-*, TT-01, PIPE-01), task-adaptive EDA (EDA-01..03, EDA-09, HINT-02), the
 Phase 4 modelling/training/prediction stack (MODEL-01..04, HINT-01, TRAIN-01..07, METRIC-01..03,
-PRED-01..05, PERF-01..02, WARN-01..07), and the Phase 5 error/explainability/outcome stack
-(ERR-01..03/07, EXPL-01..03/05/10/11, OUT-01, EXPORT-01/02, PERF-05, GATE-02/04) — all checks
+PRED-01..05, PERF-01..02, WARN-01..07), the Phase 5 error/explainability/outcome stack
+(ERR-01..03/07, EXPL-01..03/05/10/11, OUT-01, EXPORT-01/02, PERF-05, GATE-02/04), and the Phase 6
+unsupervised stack — KMeans clustering, PCA dimensionality reduction and Isolation-Forest anomaly
+detection with holdout scoring (METRIC-05..07), unsupervised EDA (EDA-05/06/07), error views
+(ERR-04/05/06), explanations (EXPL-06/07/08) and outcome packaging (OUT-02/03/04) — all checks
 green (ruff, mypy strict, rule-test sync, pytest).
 
-## MVP scope (delivered in Phases 2–5)
+## MVP scope (delivered in Phases 2–6)
 
-- Tasks: binary and multiclass classification, regression on tabular data
-- Models: linear baselines and gradient boosting (scikit-learn, XGBoost, LightGBM)
+- Tasks: binary and multiclass classification, regression, clustering, dimensionality reduction and
+  anomaly detection on tabular data
+- Models: linear baselines and gradient boosting (scikit-learn, XGBoost, LightGBM), KMeans, PCA,
+  Isolation Forest
 - All 10 workflow tabs present end-to-end: state, gating, staleness, step log, SHAP, report and script export
-- Deferred: unsupervised depth (Phase 6), neural networks (Phase 7), time series / autoencoders /
+- Deferred: neural networks (Phase 7), time series / autoencoders /
   association rules / auto-compare (Phase 8), production hardening (Phase 9)
 
 ## Phases
@@ -186,6 +192,45 @@ proves capacity-2 eviction.*
 background job, packages the outcome and writes the report bundle; `scaffold_rule_tests --check`
 stays in sync.*
 
+#### Phase 6 — Unsupervised: Clustering, Dim-Reduction, Anomaly ✅
+
+- [x] Unsupervised task definitions (TASK-03): clustering, dimensionality reduction, anomaly
+      detection registered 1:1 into the registry and gated by `learning_type=unsupervised`
+      (`src/ml_workbench/rules/task.py`, `registry/models.yaml`)
+- [x] Phase 6 models: KMeans (clustering, `has_predict`, surrogate explanations), PCA
+      (dimensionality-reduction, `has_transform`, loadings explanations), Isolation Forest (anomaly,
+      `has_predict`, tree importance/deviations) — buildable, trappable, trainable in the
+      Training tab, and scoreable on holdouts (METRIC-05..07)
+      (`src/ml_workbench/services/training_service.py`)
+- [x] Unsupervised splits (SPLIT-05/06): stratified holdout when evaluation labels are set, one-step
+      no-split otherwise (`src/ml_workbench/services/preprocessing_service.py`)
+- [x] Unsupervised EDA (EDA-05/06/07): Hopkins statistic, PCA preview + scree plot (clustering),
+      correlation clusters + VIF (dim-reduction), z-score/IQR + Mahalanobis flags (anomaly)
+      (`src/ml_workbench/services/eda_service.py`, `ui/eda_tab.py`)
+- [x] Unsupervised prediction: `pc1..pcN` projections for transformers, cluster/flag assignments
+      otherwise, test-evaluation scores (silhouette/D-B/Calinski-H + ARI/NMI, explained
+      variance/reconstruction/trustworthiness, ROC/PR-AUC)
+      (`src/ml_workbench/services/prediction_service.py`, `ui/prediction_tab.py`)
+- [x] Unsupervised error views (ERR-04/05/06): per-sample silhouette + low-score points + cluster
+      size imbalance, reconstruction error per row + poorly embedded points, anomaly score
+      distribution + top flagged + FP/FN vs labels
+      (`src/ml_workbench/rules/error_analysis.py`, `services/error_service.py`, `ui/error_analysis_tab.py`)
+- [x] Unsupervised explanations (EXPL-06/07/08): cluster centroids + per-feature F-ratios + surrogate
+      tree + personas; PCA loadings + variance + biplot + per-feature reconstruction error; anomaly
+      importances + flagged-row feature deviations (`src/ml_workbench/services/explain_service.py`)
+- [x] Unsupervised outcome packaging (OUT-02/03/04): `clusters.csv` += profiles + personas,
+      `embeddings.csv` += summary.json, `flagged.csv` += score distribution + threshold, each with a
+      pipeline copy and model card (`src/ml_workbench/services/outcome_service.py`, `ui/outcome_tab.py`)
+- [x] Rule tests implemented (METRIC-05/06/07, ERR-04/05/06, EXPL-06/07/08, OUT-02/03/04, EDA-05/06/07)
+      + service tests per flow (`tests/test_phase6_unsupervised.py`) against
+      `data/samples/clustering.csv` and a synthetic-labeled anomaly sample; unlabeled flows raise a
+      clear no-test-split error
+
+**Exit criteria:** clustering, dim-reduction and anomaly runs on sample data with explanations,
+error views and packaged outcomes; rule coverage green.
+→ *met: `test_phase6_unsupervised.py` drives train → evaluate → predict → error → explain → outcome
+for all three task types; `scaffold_rule_tests --check` stays in sync.*
+
 ### Implementation
 
 | # | Phase | Status | Content | Exit criteria |
@@ -194,7 +239,7 @@ stays in sync.*
 | 3 | Preprocessing + EDA | ✅ | Split/encoding/scaling rules from registry, leakage-safe pipeline build, task-adaptive EDA views | Leakage-safety tests pass; EDA adapts to task |
 | 4 | Modelling, Training, Prediction | ✅ | Registry filtering, hyperparameter forms, CV/tuning, leaderboard, artifacts + metadata sidecars, prediction tab | Train → leaderboard → predict on tabular cls/reg; LRU lazy-load works |
 | 5 | Error Analysis, Explainability, Outcome | ✅ | Task-specific error views, SHAP as background jobs, report + script export + model card | **MVP complete:** full 10-tab flow on sample data with reproducible script |
-| 6 | Unsupervised | — | Clustering, PCA/UMAP, anomaly detection, surrogate explanations | Design doc Phase 2 delivered |
+| 6 | Unsupervised | ✅ | KMeans clustering, PCA dimensionality reduction, Isolation-Forest anomaly detection: splits, EDA, holdout scoring, error views, explanations, outcomes | Clustering/dim-reduction/anomaly runs with explanations + packaged outcomes on sample data |
 | 7 | Neural networks | — | MLP/transformers, GPU routing, live loss curves, gradient-based explanations | Design doc Phase 3 delivered |
 | 8 | Advanced | — | Time series, autoencoders, association rules, auto-compare | Design doc Phase 4 delivered |
 | 9 | Production (optional) | — | Background job queue (Redis/Celery), multi-user projects, ONNX serving, monitoring | Design doc Phase 5 delivered |

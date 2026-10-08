@@ -59,19 +59,22 @@ def test_eda_timeseries_views() -> None:
     raise NotImplementedError("docs/rules.md EDA-04")
 
 
-@pytest.mark.skip(reason="pending implementation: docs/rules.md EDA-05")
 def test_eda_clustering_views() -> None:
-    raise NotImplementedError("docs/rules.md EDA-05")
+    views = task_views(_task("clustering", learning_type="unsupervised"))
+    assert views == ("hopkins", "pca_umap_preview", "scree")
+    assert "hopkins" in eda_plan(_task("clustering", learning_type="unsupervised"))
 
 
-@pytest.mark.skip(reason="pending implementation: docs/rules.md EDA-06")
 def test_eda_anomaly_views() -> None:
-    raise NotImplementedError("docs/rules.md EDA-06")
+    views = task_views(_task("anomaly_detection", learning_type="unsupervised"))
+    assert views == ("zscore_iqr_flags", "mahalanobis")
+    assert "mahalanobis" in eda_plan(_task("anomaly_detection", learning_type="unsupervised"))
 
 
-@pytest.mark.skip(reason="pending implementation: docs/rules.md EDA-07")
 def test_eda_dimred_views() -> None:
-    raise NotImplementedError("docs/rules.md EDA-07")
+    views = task_views(_task("dimensionality_reduction", learning_type="unsupervised"))
+    assert views == ("correlation_groups", "vif")
+    assert "vif" in eda_plan(_task("dimensionality_reduction", learning_type="unsupervised"))
 
 
 @pytest.mark.skip(reason="pending implementation: docs/rules.md EDA-08")

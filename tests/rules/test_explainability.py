@@ -4,13 +4,17 @@ import math
 import pytest
 
 from ml_workbench.rules.explainability import (
+    anomaly_explanation_panels,
     auto_explain_warnings,
+    clustering_explanation_panels,
+    embedding_explanation_panels,
     explain_cache_key,
     kernel_explanation,
     linear_explanation,
     shap_runs_in_job,
     supervised_explanation_panels,
     tree_explanation,
+    unsupervised_explanation_panels,
 )
 
 
@@ -54,21 +58,29 @@ def test_expl_global_and_local_supervised() -> None:
     assert panels["local"] == ["shap_waterfall", "lime"]
 
 
-@pytest.mark.skip(
-    reason="clustering surrogate explanations arrive in Phase 6 (docs/rules.md EXPL-06)"
-)
 def test_expl_clustering_surrogate() -> None:
-    raise NotImplementedError("docs/rules.md EXPL-06")
+    panels = clustering_explanation_panels()
+    assert panels["cluster"] == ["centroid_heatmap", "anova_per_feature"]
+    assert panels["surrogate"] == [
+        "nearest_centroid_assign",
+        "surrogate_tree",
+        "personas",
+    ]
+    assert unsupervised_explanation_panels("clustering") == panels
 
 
-@pytest.mark.skip(reason="embedding explanation panels arrive in Phase 6 (docs/rules.md EXPL-07)")
 def test_expl_embedding_panels() -> None:
-    raise NotImplementedError("docs/rules.md EXPL-07")
+    panels = embedding_explanation_panels()
+    assert panels["projection"] == ["loadings_table", "biplot_coordinates"]
+    assert panels["quality"] == ["reconstruction_error_per_feature"]
+    assert unsupervised_explanation_panels("dimensionality_reduction") == panels
 
 
-@pytest.mark.skip(reason="anomaly explanation panels arrive in Phase 6 (docs/rules.md EXPL-08)")
 def test_expl_anomaly_panels() -> None:
-    raise NotImplementedError("docs/rules.md EXPL-08")
+    panels = anomaly_explanation_panels()
+    assert panels["global"] == ["tree_shap_importances"]
+    assert panels["local"] == ["per_feature_deviation"]
+    assert unsupervised_explanation_panels("anomaly_detection") == panels
 
 
 @pytest.mark.skip(reason="association-rule panels arrive in Phase 8 (docs/rules.md EXPL-09)")

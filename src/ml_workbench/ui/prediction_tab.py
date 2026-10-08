@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 from pandas.api.types import is_numeric_dtype
@@ -50,11 +51,46 @@ def render_prediction_tab(state: ProjectState, workspace: Workspace) -> None:
 
     if binary and evaluation.y_proba is not None:
         _render_binary(state, evaluation, run_id)
+    elif state.task.learning_type == "unsupervised":
+        _render_unsupervised(state, workspace, run_id, evaluation)
     else:
         _render_regression(state, evaluation, run_id)
 
     _render_single_row(state, workspace, run_id)
     _render_batch(state, workspace, run_id)
+
+
+def _render_unsupervised(
+    state: ProjectState,
+    workspace: Workspace,
+    run_id: str,
+    evaluation: Any,
+) -> None:
+    st.markdown("##### Holdout assignments (first 200 test rows)")
+    if state.split is not None and state.split.indices_path is not None:
+        import json
+        from pathlib import Path
+
+        indices = json.loads(Path(state.split.indices_path).read_text())
+        test_idx = np.asarray(indices["test"], dtype=int)
+        if len(test_idx) > 0:
+            assert state.frame is not None
+            result = predict_frame(state, workspace, run_id, state.frame.iloc[test_idx])
+            columns = [
+                name
+                for name in result.df.columns
+                if str(name).startswith("pc") or name == "prediction"
+            ]
+            st.dataframe(
+                result.df[columns].head(200),
+                use_container_width=True,
+            )
+    if evaluation.y_true is not None and evaluation.y_pred is not None:
+        st.markdown("##### Predicted vs evaluation labels")
+        st.dataframe(
+            pd.DataFrame({"label": evaluation.y_true, "prediction": evaluation.y_pred}).head(200),
+            use_container_width=True,
+        )
 
 
 def _render_binary(state: ProjectState, evaluation: Any, run_id: str) -> None:

@@ -22,6 +22,9 @@ def render_eda_tab(state: ProjectState, workspace: Workspace) -> None:
     _render_base(state, report)
     _render_classification(state, report)
     _render_regression(state, task, report)
+    _render_clustering(state, report)
+    _render_anomaly(state, report)
+    _render_dimred(state, report)
     st.caption(
         "EDA views are read-only; upstream edits mark this tab stale "
         "(run Cleaning again to refresh)."
@@ -91,3 +94,61 @@ def _render_regression(state: ProjectState, task: TaskDefinition, report: EdaRes
     if report.regression.feature_scatter is not None:
         st.markdown("**Features vs target (sampled)**")
         st.dataframe(report.regression.feature_scatter, hide_index=True, height=240)
+
+
+def _render_clustering(state: ProjectState, report: EdaResult) -> None:
+    if report.clustering is None:
+        return
+    st.subheader("Clustering views (EDA-05)")
+    st.metric("Hopkins statistic", report.clustering.hopkins)
+    st.caption(
+        "Hopkins ≈ 0.5 suggests near-random data; values above 0.7 suggest clusterable structure."
+    )
+    if report.clustering.components_for_90 is not None:
+        st.metric("Components for 90% variance", report.clustering.components_for_90)
+    if report.clustering.scree is not None:
+        st.markdown("**Scree plot (PCA preview)**")
+        st.dataframe(report.clustering.scree, hide_index=True)
+        st.bar_chart(
+            report.clustering.scree.set_index("component")["explained_variance"],
+            height=240,
+        )
+
+
+def _render_anomaly(state: ProjectState, report: EdaResult) -> None:
+    if report.anomaly is None:
+        return
+    st.subheader("Anomaly views (EDA-06)")
+    st.markdown("**Univariate z-score flags (|z| > 3)**")
+    if report.anomaly.zscore_flags is not None and not report.anomaly.zscore_flags.empty:
+        st.dataframe(report.anomaly.zscore_flags, hide_index=True)
+    else:
+        st.caption("No feature exceeds the |z| > 3 threshold.")
+    st.markdown("**IQR flags (below/above 1.5·IQR)**")
+    if report.anomaly.iqr_flags is not None and not report.anomaly.iqr_flags.empty:
+        st.dataframe(report.anomaly.iqr_flags, hide_index=True)
+    else:
+        st.caption("No feature has IQR outliers.")
+    st.markdown("**Mahalanobis distance (multivariate)**")
+    if report.anomaly.mahalanobis is not None:
+        st.dataframe(report.anomaly.mahalanobis, hide_index=True)
+    else:
+        st.caption("Not enough variation to fit a Mahalanobis model.")
+
+
+def _render_dimred(state: ProjectState, report: EdaResult) -> None:
+    if report.dimred is None:
+        return
+    st.subheader("Dimensionality reduction views (EDA-07)")
+    st.markdown("**Correlation groups (|ρ| ≥ 0.7)**")
+    if report.dimred.correlation_groups:
+        for group in report.dimred.correlation_groups:
+            st.write(", ".join(group))
+    else:
+        st.caption("No correlated feature groups found.")
+    st.markdown("**Variance inflation factors (VIF)**")
+    if report.dimred.vif is not None:
+        st.dataframe(report.dimred.vif, hide_index=True)
+        st.caption("VIF ≥ 10 indicates strong multicollinearity.")
+    else:
+        st.caption("VIF not computable with the current features.")

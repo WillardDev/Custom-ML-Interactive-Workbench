@@ -43,6 +43,12 @@ def render_error_analysis_tab(state: ProjectState, workspace: Workspace) -> None
         _render_multiclass(views)
     elif state.task.task_type in {"regression", "forecasting"}:
         _render_regression(views)
+    elif state.task.task_type == "clustering":
+        _render_clustering(views)
+    elif state.task.task_type == "dimensionality_reduction":
+        _render_dimred(views)
+    elif state.task.task_type == "anomaly_detection":
+        _render_anomaly(views)
 
     st.markdown("##### Worst-N rows (ERR-07)")
     if not report.worst_n.empty:
@@ -50,6 +56,67 @@ def render_error_analysis_tab(state: ProjectState, workspace: Workspace) -> None
     if report.segments is not None and not report.segments.empty:
         st.markdown("##### Segment slices (ERR-07)")
         st.dataframe(report.segments, use_container_width=True)
+
+
+def _render_clustering(views: dict[str, Any]) -> None:
+    silhouette = views.get("silhouette_per_sample", {})
+    if silhouette:
+        st.markdown(
+            f"##### Per-sample silhouette (mean = {silhouette.get('mean', float('nan')):.4f})"
+        )
+        fig = go.Figure(go.Bar(y=silhouette.get("values", []), orientation="h"))
+        st.plotly_chart(fig, use_container_width=True)
+    low = views.get("low_silhouette_points", {})
+    if low and not low.get("table", pd.DataFrame()).empty:
+        st.markdown(f"##### Low-silhouette points (count = {low.get('count', 0)})")
+        st.dataframe(low["table"], use_container_width=True)
+    imbalance = views.get("cluster_size_imbalance", {})
+    if imbalance:
+        fig = go.Figure(go.Bar(x=imbalance.get("labels", []), y=imbalance.get("counts", [])))
+        fig.update_layout(xaxis_title="Cluster", yaxis_title="Rows")
+        st.markdown("##### Cluster size imbalance")
+        st.plotly_chart(fig, use_container_width=True)
+    stability = views.get("stability_warning", {}).get("warning")
+    if stability:
+        st.caption(stability)
+
+
+def _render_dimred(views: dict[str, Any]) -> None:
+    recon = views.get("reconstruction_error_per_row", {})
+    if recon and not recon.get("table", pd.DataFrame()).empty:
+        st.markdown(f"##### Reconstruction error per row (mean = {recon.get('mean'):.4f})")
+        st.dataframe(recon["table"].head(200), use_container_width=True)
+    poorly = views.get("poorly_embedded_points", {})
+    if poorly is not None and poorly.get("threshold"):
+        st.caption(
+            f"{poorly.get('count')} rows exceed the 80th-percentile reconstruction "
+            f"error ({poorly.get('threshold')})."
+        )
+
+
+def _render_anomaly(views: dict[str, Any]) -> None:
+    scores = views.get("score_distribution", {})
+    if scores:
+        st.markdown(
+            f"##### Score distribution (mean = {scores.get('mean'):.4f}, "
+            f"std = {scores.get('std'):.4f}, flagged = {scores.get('flagged')})"
+        )
+    top = views.get("top_flagged_rows", {})
+    if top and not top.get("table", pd.DataFrame()).empty:
+        st.markdown(f"##### Top flagged rows ({top.get('count')} flagged)")
+        st.dataframe(top["table"].head(200), use_container_width=True)
+        if top.get("quantiles"):
+            st.caption(
+                "Score quantiles: "
+                + ", ".join(f"{k}% = {v:.4f}" for k, v in top["quantiles"].items())
+            )
+    confusion = views.get("false_positives_negatives", {})
+    if confusion:
+        st.markdown("##### Flagged vs labeled (FP/FN)")
+        st.caption(
+            f"TP = {confusion['tp']}, FP = {confusion['fp']}, "
+            f"FN = {confusion['fn']}, TN = {confusion['tn']}"
+        )
 
 
 def _render_binary(views: dict[str, Any]) -> None:

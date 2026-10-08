@@ -23,8 +23,9 @@ def metric_plan(
     *,
     minority_fraction: float | None = None,
     target_skew: float = 0.0,
+    labeled: bool = False,
 ) -> MetricPlan:
-    """METRIC-01..08: scoreboard for the task (supervised classification/regression wired now)."""
+    """METRIC-01..08: scoreboard for the task (supervised and unsupervised phases)."""
     if task_type in CLASSIFICATION_TASK_TYPES:
         if minority_fraction is not None and minority_fraction < MINORITY_FRACTION_THRESHOLD:
             return MetricPlan(
@@ -62,6 +63,14 @@ def metric_plan(
             note="time series: MAE, RMSE, MASE.",
         )
     if task_type == "clustering":
+        if labeled:
+            return MetricPlan(
+                primary="adjusted_rand",
+                metrics=("adjusted_rand", "nmi", "silhouette"),
+                rule_id="METRIC-05",
+                note="clustering with evaluation labels: ARI and NMI on the holdout, "
+                "silhouette alongside.",
+            )
         return MetricPlan(
             primary="silhouette",
             metrics=("silhouette", "davies_bouldin", "calinski_harabasz"),
@@ -71,11 +80,19 @@ def metric_plan(
     if task_type == "dimensionality_reduction":
         return MetricPlan(
             primary="explained_variance",
-            metrics=("explained_variance", "reconstruction_error"),
+            metrics=("explained_variance", "reconstruction_error", "trustworthiness"),
             rule_id="METRIC-06",
-            note="dimensionality reduction: explained variance and reconstruction error.",
+            note="dimensionality reduction: explained variance, reconstruction error "
+            "and trustworthiness.",
         )
     if task_type == "anomaly_detection":
+        if labeled:
+            return MetricPlan(
+                primary="roc_auc",
+                metrics=("roc_auc", "pr_auc"),
+                rule_id="METRIC-07",
+                note="anomaly detection with labels: ROC-AUC and PR-AUC on the holdout.",
+            )
         return MetricPlan(
             primary="score_distribution",
             metrics=("score_distribution",),
@@ -88,3 +105,38 @@ def metric_plan(
         rule_id="METRIC-08",
         note="association rules: support, confidence, lift filters.",
     )
+
+
+def labeled_cluster_scores(labels_true: object, labels_pred: object) -> dict[str, float]:
+    """METRIC-05: ARI and NMI when clustering has evaluation labels."""
+    from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
+
+    ari = float(adjusted_rand_score(labels_true, labels_pred))
+    nmi = float(normalized_mutual_info_score(labels_true, labels_pred))
+    return {"adjusted_rand": round(ari, 6), "nmi": round(nmi, 6)}
+
+
+def anomaly_labeled_scores(labels_true: object, decision_scores: object) -> dict[str, float]:
+    """METRIC-07: ROC-AUC and PR-AUC when anomaly detection has evaluation labels."""
+    from sklearn.metrics import average_precision_score, roc_auc_score
+
+    try:
+        roc = float(roc_auc_score(labels_true, decision_scores))
+    except ValueError:
+        roc = float("nan")
+    try:
+        pr = float(average_precision_score(labels_true, decision_scores))
+    except ValueError:
+        pr = float("nan")
+    return {"roc_auc": round(roc, 6), "pr_auc": round(pr, 6)}
+
+
+def trustworthiness_coef(high_dim: object, low_dim: object, n_neighbors: int = 5) -> float:
+    """METRIC-06: trustworthiness of an embedding vs the original space."""
+    from sklearn.manifold import trustworthiness as _trustworthiness
+
+    try:
+        value = float(_trustworthiness(high_dim, low_dim, n_neighbors=n_neighbors))
+    except ValueError:
+        return float("nan")
+    return round(value, 6)
