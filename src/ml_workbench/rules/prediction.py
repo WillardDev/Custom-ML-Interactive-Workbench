@@ -70,3 +70,24 @@ def needs_surrogate(flags: dict[str, Any]) -> str | None:
 def projection_blocked(flags: dict[str, Any]) -> bool:
     """PRED-05: viz-only projections are blocked from the prediction pipeline."""
     return bool(flags.get("viz_only"))
+
+
+NOVELTY_ONLY_MODELS = frozenset({"lof"})
+
+
+def anomaly_scoring_plan(model_id: str) -> dict[str, Any]:
+    """PRED-06: anomaly rows get a score and a flag at an adjustable threshold;
+    LOF only scores unseen rows in novelty mode."""
+    return {
+        "score_by": "decision_function",
+        "score_sign": "higher_is_more_anomalous",
+        "threshold": 0.0,
+        "novelty_mode": model_id in NOVELTY_ONLY_MODELS,
+    }
+
+
+def novelty_kwargs(model_id: str) -> dict[str, Any]:
+    """PRED-06: estimator kwargs that keep novelty-only models in novelty mode."""
+    if model_id in NOVELTY_ONLY_MODELS:
+        return {"novelty": True}
+    return {}

@@ -60,7 +60,7 @@ def render_explainability_tab(state: ProjectState, workspace: Workspace) -> None
         st.rerun()
 
     if report is None:
-        st.info("Explainability dispatches panels by `explain_method` (EXPL-01/02/03/05).")
+        st.info("Explainability dispatches panels by `explain_method` (EXPL-01/02/03/04/05).")
         return
     _render_report(report)
 
@@ -90,6 +90,16 @@ def _render_report(report: Any) -> None:
             st.dataframe(pd.DataFrame(panel["rows"]).round(4), use_container_width=True)
             if panel.get("note"):
                 st.caption(panel["note"])
+        elif name == "gradient_attributions":
+            st.markdown("##### Integrated Gradients — global attributions (EXPL-04)")
+            st.dataframe(pd.DataFrame(panel["table"]).round(4), use_container_width=True)
+            if panel.get("note"):
+                st.caption(panel["note"])
+        elif name == "gradient_local":
+            st.markdown("##### Integrated Gradients — first row (EXPL-04)")
+            attribution = panel.get("attribution") or []
+            if attribution:
+                st.dataframe(pd.DataFrame(attribution).round(4), use_container_width=True)
         elif name == "pdp_ice":
             _render_pdp(panel)
         elif name == "centroid_heatmap":

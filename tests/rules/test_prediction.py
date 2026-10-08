@@ -4,9 +4,11 @@ import numpy as np
 import pytest
 
 from ml_workbench.rules.prediction import (
+    anomaly_scoring_plan,
     apply_threshold,
     calibration_curve,
     needs_surrogate,
+    novelty_kwargs,
     prediction_interval,
     projection_blocked,
     threshold_metrics,
@@ -39,7 +41,7 @@ def test_pred_regression_intervals() -> None:
     assert np.all(upper > predictions)
 
 
-@pytest.mark.skip(reason="forecasting horizon/backtest arrives in Phase 7 (docs/rules.md PRED-03)")
+@pytest.mark.skip(reason="forecasting horizon/backtest arrives in Phase 8 (docs/rules.md PRED-03)")
 def test_pred_forecast_horizon_backtest() -> None:
     raise NotImplementedError("docs/rules.md PRED-03")
 
@@ -55,11 +57,19 @@ def test_pred_tsne_projection_blocked() -> None:
     assert projection_blocked({"viz_only": False}) is False
 
 
-@pytest.mark.skip(reason="anomaly scoring arrives in Phase 7 (docs/rules.md PRED-06)")
 def test_pred_anomaly_lof_novelty_only() -> None:
-    raise NotImplementedError("docs/rules.md PRED-06")
+    plan = anomaly_scoring_plan("isolation_forest")
+    assert plan["score_by"] == "decision_function"
+    assert plan["score_sign"] == "higher_is_more_anomalous"
+    assert plan["threshold"] == 0.0
+    assert plan["novelty_mode"] is False
+    assert novelty_kwargs("isolation_forest") == {}
+    lof = anomaly_scoring_plan("lof")
+    assert lof["novelty_mode"] is True
+    assert lof["threshold"] == 0.0
+    assert novelty_kwargs("lof") == {"novelty": True}
 
 
-@pytest.mark.skip(reason="association rules arrive in Phase 7 (docs/rules.md PRED-07)")
+@pytest.mark.skip(reason="association rules arrive in Phase 8 (docs/rules.md PRED-07)")
 def test_pred_basket_recommendations() -> None:
     raise NotImplementedError("docs/rules.md PRED-07")

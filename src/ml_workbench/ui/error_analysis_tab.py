@@ -49,6 +49,7 @@ def render_error_analysis_tab(state: ProjectState, workspace: Workspace) -> None
         _render_dimred(views)
     elif state.task.task_type == "anomaly_detection":
         _render_anomaly(views)
+    _render_neural(views)
 
     st.markdown("##### Worst-N rows (ERR-07)")
     if not report.worst_n.empty:
@@ -117,6 +118,38 @@ def _render_anomaly(views: dict[str, Any]) -> None:
             f"TP = {confusion['tp']}, FP = {confusion['fp']}, "
             f"FN = {confusion['fn']}, TN = {confusion['tn']}"
         )
+
+
+def _render_neural(views: dict[str, Any]) -> None:
+    """ERR-08: learning curve, overfitting diagnostics and per-epoch metrics for neural runs."""
+    curve = views.get("learning_curve")
+    if curve:
+        st.markdown("##### Learning curve (ERR-08)")
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(y=curve.get("train_loss", []), name="train"))
+        fig.add_trace(go.Scatter(y=curve.get("val_loss", []), name="validation"))
+        best = int(curve.get("best_epoch", 0))
+        if best > 0:
+            fig.add_vline(x=best - 1, line_dash="dot", annotation_text="best")
+        fig.update_layout(xaxis_title="Epoch", yaxis_title="Loss")
+        st.plotly_chart(fig, use_container_width=True)
+    diagnostics = views.get("overfitting_diagnostics")
+    if diagnostics:
+        st.markdown("##### Overfitting diagnostics (ERR-08)")
+        st.caption(
+            f"best epoch {diagnostics['best_epoch']} "
+            f"(val loss {diagnostics['best_val_loss']:.4f}); "
+            f"final train {diagnostics['final_train_loss']:.4f} / "
+            f"val {diagnostics['final_val_loss']:.4f} (gap {diagnostics['gap']:+.4f}); "
+            f"{diagnostics['epochs_run']}/{diagnostics['epochs']} epochs"
+            + (" — stopped early" if diagnostics["stopped_early"] else "")
+        )
+        if diagnostics["overfitting"]:
+            st.warning("Validation loss rose after the best epoch — overfitting detected (ERR-08).")
+    rows = views.get("per_epoch_metrics", {}).get("rows")
+    if rows:
+        with st.expander("Per-epoch metrics (ERR-08)"):
+            st.dataframe(pd.DataFrame(rows).round(4), use_container_width=True)
 
 
 def _render_binary(views: dict[str, Any]) -> None:

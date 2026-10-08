@@ -13,7 +13,9 @@ from sklearn.tree import DecisionTreeClassifier
 
 from ml_workbench.registry import ModelSpec, load_registry
 from ml_workbench.rules.explainability import (
+    GRADIENT_STEPS,
     auto_explain_warnings,
+    gradient_explanation,
     kernel_explanation,
     linear_explanation,
     tree_explanation,
@@ -21,6 +23,7 @@ from ml_workbench.rules.explainability import (
 from ml_workbench.rules.performance import disk_cache_key
 from ml_workbench.services.model_cache import ModelCache
 from ml_workbench.services.prediction_service import get_pipeline
+from ml_workbench.services.training_service import _anomaly_decision
 from ml_workbench.services.workspace import Workspace, utc_now
 from ml_workbench.state import ProjectState, feature_columns
 
@@ -100,7 +103,7 @@ def explain_model(
     pipeline = get_pipeline(workspace, run_id, cache)
 
     if task.learning_type == "unsupervised":
-        method = _unsupervised_method(spec, task.task_type)
+        method = _unsupervised_method(spec, task.task_type, pipeline.named_steps["model"])
         panels, warnings = _unsupervised_explanations(
             task.task_type, pipeline, list(x.columns), x, state
         )
@@ -150,16 +153,22 @@ def _method_for(
         return "tree_shap" if shap_available() else "tree_importances"
     if desired == "kernel_shap":
         return "kernel_shap" if shap_available() else "permutation_importance"
-    return "permutation_importance" if desired in {"gradient", "surrogate", "loadings"} else desired
+    if desired == "gradient":
+        return "integrated_gradients"
+    return "permutation_importance" if desired in {"surrogate", "loadings"} else desired
 
 
-def _unsupervised_method(spec: ModelSpec, task_type: str) -> str:
+def _unsupervised_method(spec: ModelSpec, task_type: str, model: Any) -> str:
     if task_type == "clustering":
         return "surrogate"
     if task_type == "dimensionality_reduction":
         return "loadings"
     desired = str(spec.flags.get("explain_method"))
-    return "tree_shap" if desired == "tree_shap" and shap_available() else "tree_importances"
+    if desired == "tree_shap" and shap_available():
+        return "tree_shap"
+    if hasattr(model, "feature_importances_"):
+        return "tree_importances"
+    return "deviation"
 
 
 def _unsupervised_explanations(
@@ -365,7 +374,7 @@ def _anomaly_explanation_panels(
                 **tree_explanation(shap_available=shap_available()),
             }
         )
-    decision = np.asarray(model.decision_function(x_scaled))
+    decision = _anomaly_decision(model, x_scaled)
     flagged = x.loc[decision > 0.0]
     deviation_rows: list[dict[str, Any]] = []
     if len(flagged) > 0:
@@ -448,6 +457,22 @@ def _explanations(
                 **kernel_explanation(background_rows, shap_available=method == "kernel_shap"),
             }
         )
+    elif method == "integrated_gradients" and hasattr(model_step, "coefs_"):
+        gradient = _integrated_gradients(pipeline, x, names)
+        if gradient is not None:
+            importance_spread = _importance_spread(
+                np.asarray([row["mean_abs"] for row in gradient["table"]], dtype=float)
+            )
+            panels.append(
+                {
+                    "panel": "gradient_attributions",
+                    "table": gradient["table"],
+                    **gradient_explanation(),
+                }
+            )
+            panels.append(
+                {"panel": "gradient_local", "row_index": 0, "attribution": gradient["local"]}
+            )
 
     pdp = _pdp_ice(pipeline, names, x)
     if pdp:
@@ -471,6 +496,103 @@ def _feature_names(pipeline: Any) -> list[str]:
         return [str(name) for name in getter()]
     except (AttributeError, ValueError):
         return []
+
+
+_MLP_ACTIVATIONS = frozenset({"relu", "tanh", "logistic"})
+
+
+def _activation_prime(kind: str, z: np.ndarray) -> np.ndarray:
+    if kind == "relu":
+        return (z > 0.0).astype(float)
+    if kind == "tanh":
+        return 1.0 - np.tanh(z) ** 2
+    sigmoid = 1.0 / (1.0 + np.exp(-np.clip(z, -60.0, 60.0)))
+    return np.asarray(sigmoid * (1.0 - sigmoid), dtype=float)
+
+
+def _output_delta(model: Any, logits: np.ndarray) -> np.ndarray:
+    """d(target)/d(last pre-activation): predicted-class probability, or the output value."""
+    out = str(getattr(model, "out_activation_", "identity"))
+    if out == "identity":
+        return np.ones_like(logits)
+    if out == "logistic":
+        # binary: one unit, probability of classes_[1].
+        proba = 1.0 / (1.0 + np.exp(-np.clip(logits, -60.0, 60.0)))
+        proba = proba.ravel()
+        sign = np.where(proba >= 0.5, 1.0, -1.0)
+        return np.asarray((proba * (1.0 - proba) * sign)[:, None], dtype=float)
+    # softmax: gradient of the predicted class probability per row.
+    shifted = logits - logits.max(axis=1, keepdims=True)
+    exp = np.exp(shifted)
+    proba = exp / exp.sum(axis=1, keepdims=True)
+    target = np.argmax(proba, axis=1)
+    target_p = proba[np.arange(len(proba)), target]
+    delta = -proba * target_p[:, None]
+    delta[np.arange(len(proba)), target] += target_p
+    return np.asarray(delta, dtype=float)
+
+
+def _mlp_input_gradients(model: Any, xs: np.ndarray) -> np.ndarray:
+    """Analytic backprop through an sklearn MLP: d(output)/d(input) per row."""
+    coefs = list(model.coefs_)
+    intercepts = list(model.intercepts_)
+    hidden_kind = str(model.activation)
+    hidden_kind = hidden_kind if hidden_kind in _MLP_ACTIVATIONS else "relu"
+    hidden_z: list[np.ndarray] = []
+    activated = np.asarray(xs, dtype=float)
+    for layer, (weights, bias) in enumerate(zip(coefs, intercepts, strict=False)):
+        z = activated @ weights + bias
+        if layer < len(coefs) - 1:
+            hidden_z.append(z)
+            if hidden_kind == "relu":
+                activated = np.maximum(z, 0.0)
+            elif hidden_kind == "tanh":
+                activated = np.tanh(z)
+            else:
+                activated = 1.0 / (1.0 + np.exp(-np.clip(z, -60.0, 60.0)))
+        else:
+            activated = z
+    delta = _output_delta(model, activated)
+    for layer in range(len(coefs) - 1, 0, -1):
+        delta = (delta @ coefs[layer].T) * _activation_prime(hidden_kind, hidden_z[layer - 1])
+    return np.asarray(delta @ coefs[0].T, dtype=float)
+
+
+def _integrated_gradients(
+    pipeline: Any, x: pd.DataFrame, names: list[str]
+) -> dict[str, Any] | None:
+    """EXPL-04: integrated gradients from a zero baseline over analytic MLP gradients."""
+    model = pipeline.named_steps.get("model")
+    preprocess = pipeline.named_steps.get("preprocess")
+    if model is None or preprocess is None or not hasattr(model, "coefs_"):
+        return None
+    xs = np.asarray(preprocess.transform(x), dtype=float)
+    grads = np.zeros_like(xs)
+    for step in range(GRADIENT_STEPS):
+        alpha = (step + 0.5) / GRADIENT_STEPS
+        grads += _mlp_input_gradients(model, alpha * xs)
+    attributions = (grads / GRADIENT_STEPS) * xs
+    width = min(len(names), attributions.shape[1])
+    mean_abs = np.abs(attributions[:, :width]).mean(axis=0)
+    order = np.argsort(-mean_abs)
+    local_order = np.argsort(-np.abs(attributions[0, :width]))
+    return {
+        "table": [
+            {
+                "feature": names[index],
+                "mean_abs": round(float(mean_abs[index]), 6),
+                "mean": round(float(attributions[:, index].mean()), 6),
+            }
+            for index in order
+        ],
+        "local": [
+            {
+                "feature": names[index],
+                "attribution": round(float(attributions[0, index]), 6),
+            }
+            for index in local_order
+        ],
+    }
 
 
 def _linear_local(

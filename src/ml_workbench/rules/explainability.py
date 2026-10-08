@@ -69,6 +69,31 @@ def kernel_explanation(background_rows: int, shap_available: bool) -> dict[str, 
     }
 
 
+GRADIENT_STEPS: int = 32
+
+
+def gradient_explanation() -> dict[str, Any]:
+    """EXPL-04: explain_method 'gradient' (neural) → Integrated Gradients with analytic
+    backpropagation; Deep/GradientExplainer SHAP and attention maps need a deep backend."""
+    return {
+        "method": "integrated_gradients",
+        "baseline": "zeros",
+        "steps": GRADIENT_STEPS,
+        "note": (
+            "integrated gradients over analytic MLP gradients; Deep/GradientExplainer SHAP "
+            "and transformer attention maps activate with a torch/tensorflow backend"
+        ),
+    }
+
+
+def gradient_explanation_panels() -> dict[str, list[str]]:
+    """EXPL-04: the neural gradient explanation panel set."""
+    return {
+        "global": ["gradient_attributions"],
+        "local": ["gradient_local"],
+    }
+
+
 def supervised_explanation_panels() -> dict[str, list[str]]:
     """EXPL-05: any supervised model gets global curves plus a local explanation."""
     return {

@@ -304,6 +304,25 @@ contracts but score on evaluation labels when provided and package task-specific
      (count/flagged/mean/std/min/quartiles/max), `threshold.json` (`{threshold: 0.0, applied: true}`).
   Packaging appends the same `{op: "package", tab: "outcome"}` step-log entry as OUT-01.
 
+## Phase 7 delivery artifacts (§6.5–6.9, `TRAIN-03`, `PRED-06`, `ERR-08`, `EXPL-04`)
+
+Neural runs and anomaly scoring extend the existing artifact set:
+
+- **Neural training payload** (`models/<run_id>/metrics.json["neural"]`, TRAIN-03): `device`,
+  `batch_size`, `loss_curve` / `val_loss_curve` (per-epoch, rounded), `best_epoch`, `epochs_run`,
+  `epochs`, `patience`, `stopped_early`. The final artifact restores the best-validation weights.
+- **Anomaly scoring contract** (PRED-06, `rules/prediction.py::anomaly_scoring_plan`): every scored
+  row gets `score` = `-decision_function` (higher = more anomalous) and `prediction` =
+  `score > threshold` with default `threshold: 0.0`; LOF is constructed with `novelty: true` so
+  `predict` / `decision_function` work on rows seen after fit. `outcome/threshold.json` records the
+  threshold used (OUT-04).
+- **Neural error views** (ERR-08, `error_views`): appended `learning_curve` (train/val series +
+  best epoch), `overfitting_diagnostics` (final train/val gap, best val loss, stopped-early flag)
+  and `per_epoch_metrics` rows — read from the metrics sidecar, so non-neural runs add nothing.
+- **Gradient explanation panels** (EXPL-04, `explain_service`): `gradient_attributions`
+  (per-feature mean|attribution| signed mean, Integrated Gradients from a zero baseline, 32 steps)
+  and `gradient_local` (first-row attributions), alongside the usual PDP/ICE (EXPL-05).
+
 ## Dataset versions and data hash (§6.1, §9)
 
 - Every dataset write creates a new immutable file

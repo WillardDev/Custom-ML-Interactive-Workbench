@@ -51,6 +51,8 @@ def render_prediction_tab(state: ProjectState, workspace: Workspace) -> None:
 
     if binary and evaluation.y_proba is not None:
         _render_binary(state, evaluation, run_id)
+    elif state.task.task_type == "anomaly_detection":
+        _render_anomaly(state, workspace, run_id)
     elif state.task.learning_type == "unsupervised":
         _render_unsupervised(state, workspace, run_id, evaluation)
     else:
@@ -91,6 +93,26 @@ def _render_unsupervised(
             pd.DataFrame({"label": evaluation.y_true, "prediction": evaluation.y_pred}).head(200),
             use_container_width=True,
         )
+
+
+def _render_anomaly(state: ProjectState, workspace: Workspace, run_id: str) -> None:
+    """PRED-06: score new rows, adjustable flag threshold, flagged-rows table."""
+    assert state.frame is not None
+    result = predict_frame(state, workspace, run_id, state.frame, cache=MODEL_CACHE)
+    scores = np.asarray(result.df["score"], dtype=float)
+    lo, hi = float(scores.min()), float(scores.max())
+    default = float(np.clip(0.0, lo, hi))
+    st.markdown("##### Scored rows (first 200)")
+    st.dataframe(result.df.head(200), use_container_width=True)
+    threshold = st.slider(
+        "Flag threshold (higher = more anomalous)", lo, hi, default, key="anomaly_threshold"
+    )
+    flagged = result.df[result.df["score"] > threshold].sort_values("score", ascending=False)
+    st.markdown(f"##### Flagged rows ({len(flagged)} of {len(result.df)})")
+    if flagged.empty:
+        st.info("No rows exceed the current threshold.")
+    else:
+        st.dataframe(flagged.head(200), use_container_width=True)
 
 
 def _render_binary(state: ProjectState, evaluation: Any, run_id: str) -> None:

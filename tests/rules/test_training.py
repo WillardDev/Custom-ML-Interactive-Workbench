@@ -2,14 +2,13 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
-
 from ml_workbench.rules.training import (
     artifact_files,
     boosting_early_stopping,
     job_routing,
     leaderboard_stats,
     log_fields,
+    neural_training_plan,
     tuning_uses_pruning,
 )
 
@@ -44,9 +43,22 @@ def test_boosting_early_stopping() -> None:
     assert boosting_early_stopping({"early_stopping": True}, {}) is False
 
 
-@pytest.mark.skip(reason="neural mini-batch training arrives in Phase 7 (docs/rules.md TRAIN-03)")
 def test_neural_training_loop() -> None:
-    raise NotImplementedError("docs/rules.md TRAIN-03")
+    plan = neural_training_plan({"batch_size": 32, "epochs": 50, "patience": 5})
+    assert plan["early_stopping"] == "validation_loss"
+    assert plan["checkpoint"] == "best_validation_loss"
+    assert plan["loss_curve"] is True
+    assert plan["validation_fraction"] == 0.1
+    assert plan["batch_size"] == 32
+    assert plan["epochs"] == 50
+    assert plan["patience"] == 5
+    assert plan["device"] == "cpu"
+    defaults = neural_training_plan({})
+    assert defaults["batch_size"] == 64
+    assert defaults["epochs"] == 100
+    assert defaults["patience"] == 10
+    gpu = neural_training_plan({}, uses_gpu=True, accelerator_available=True)
+    assert gpu["device"] == "gpu"
 
 
 def test_tuning_uses_pruning() -> None:

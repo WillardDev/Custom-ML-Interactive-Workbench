@@ -35,7 +35,7 @@ def test_metrics_regression_skew_prefers_mae() -> None:
     assert "rmse" in skewed.metrics and "r2" in skewed.metrics
 
 
-@pytest.mark.skip(reason="time series metrics arrive in Phase 7 (docs/rules.md METRIC-04)")
+@pytest.mark.skip(reason="time series metrics arrive in Phase 8 (docs/rules.md METRIC-04)")
 def test_metrics_time_series() -> None:
     raise NotImplementedError("docs/rules.md METRIC-04")
 
@@ -95,6 +95,6 @@ def test_metrics_anomaly_labeled_vs_not() -> None:
     assert np.isnan(single_class["roc_auc"])
 
 
-@pytest.mark.skip(reason="association-rule metrics arrive in Phase 7 (docs/rules.md METRIC-08)")
+@pytest.mark.skip(reason="association-rule metrics arrive in Phase 8 (docs/rules.md METRIC-08)")
 def test_metrics_association_filters() -> None:
     raise NotImplementedError("docs/rules.md METRIC-08")

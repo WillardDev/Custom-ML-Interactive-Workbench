@@ -17,7 +17,7 @@ from ml_workbench.rules.prediction import apply_threshold
 from ml_workbench.rules.staleness import mark_downstream_stale
 from ml_workbench.services.prediction_service import predict_frame
 from ml_workbench.services.preprocessing_service import apply_target_transform, build_pipeline
-from ml_workbench.services.training_service import build_estimator
+from ml_workbench.services.training_service import _anomaly_decision, build_estimator
 from ml_workbench.services.workspace import Workspace, utc_now
 from ml_workbench.state import ProjectState, StepEntry, feature_columns
 
@@ -281,7 +281,7 @@ def build_unsupervised_outcome(
         features = list(feature_columns(state.task, state.frame))
         loaded = joblib.load(source)
         x = np.asarray(loaded.named_steps["preprocess"].transform(state.frame[features]))
-        decision = np.asarray(loaded.named_steps["model"].decision_function(x))
+        decision = _anomaly_decision(loaded.named_steps["model"], x)
         flagged = state.frame.copy()
         flagged["score"] = decision
         flagged["flagged"] = (decision > 0.0).astype(int)

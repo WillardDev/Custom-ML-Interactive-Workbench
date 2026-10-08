@@ -19,11 +19,12 @@ from sklearn.metrics import (
     silhouette_samples,
 )
 
-from ml_workbench.rules.error_analysis import error_view_plan
+from ml_workbench.rules.error_analysis import error_view_plan, neural_diagnostics
 from ml_workbench.rules.prediction import calibration_curve, threshold_metrics
 from ml_workbench.services.model_cache import ModelCache
 from ml_workbench.services.prediction_service import get_pipeline
-from ml_workbench.services.workspace import Workspace
+from ml_workbench.services.training_service import _anomaly_decision
+from ml_workbench.services.workspace import Workspace, WorkspaceError
 from ml_workbench.state import ProjectState, feature_columns
 
 
@@ -51,7 +52,7 @@ def error_views(
     *,
     cache: ModelCache | None = None,
 ) -> ErrorReport:
-    """ERR-01..07: task-specific error views on the held-out test split."""
+    """ERR-01..08: task-specific error views on the held-out test split."""
     if state.frame is None or state.task is None:
         raise ErrorAnalysisError("load a dataset and set a task first")
     if state.task.learning_type == "unsupervised":
@@ -87,6 +88,7 @@ def error_views(
     ]
     worst_n = _worst_n_rows(predictions, state.task.target)
     segments = _segment_slices(predictions, y_true, y_pred)
+    views.extend(_neural_error_views(workspace, run_id))
     return ErrorReport(
         task_type=state.task.task_type,
         views=tuple(views),
@@ -98,6 +100,43 @@ def error_views(
 
 def _view_names(task_type: str) -> list[str]:
     return [str(plan["view"]) for plan in error_view_plan(task_type)]
+
+
+def _neural_error_views(workspace: Workspace, run_id: str) -> list[dict[str, Any]]:
+    """ERR-08: learning curves, overfitting diagnostics and per-epoch metrics for neural runs."""
+    try:
+        payload = workspace.read_run_json(run_id, "metrics.json")
+    except WorkspaceError:
+        return []
+    neural = payload.get("neural")
+    if not isinstance(neural, dict):
+        return []
+    train_curve = [float(value) for value in neural.get("loss_curve", [])]
+    val_curve = [float(value) for value in neural.get("val_loss_curve", [])]
+    if not train_curve:
+        return []
+    diagnostics = neural_diagnostics(
+        train_curve,
+        val_curve,
+        best_epoch=int(neural.get("best_epoch", -1)),
+        epochs_run=int(neural.get("epochs_run", len(train_curve))),
+        epochs=int(neural.get("epochs", len(train_curve))),
+        patience=int(neural.get("patience", 10)),
+    )
+    rows = [
+        {"epoch": index + 1, "train_loss": train_loss, "val_loss": val_loss}
+        for index, (train_loss, val_loss) in enumerate(zip(train_curve, val_curve, strict=False))
+    ]
+    return [
+        {
+            "view": "learning_curve",
+            "train_loss": train_curve,
+            "val_loss": val_curve,
+            "best_epoch": diagnostics["best_epoch"],
+        },
+        {"view": "overfitting_diagnostics", **diagnostics},
+        {"view": "per_epoch_metrics", "rows": rows},
+    ]
 
 
 def _positive_proba(
@@ -422,7 +461,7 @@ def _unsupervised_error_views(
             predictions[f"pc{k + 1}"] = embedding[:, k]
         payloads = _dimred_error_payloads(model, x_test)
     elif task_type == "anomaly_detection":
-        decision = np.asarray(model.decision_function(x_test))
+        decision = _anomaly_decision(model, x_test)
         predictions["score"] = decision
         predictions["prediction"] = (decision > 0.0).astype(int)
         payloads = _anomaly_error_payloads(decision, predictions["score"])
@@ -439,6 +478,7 @@ def _unsupervised_error_views(
                 }
             )
     views = _resolve_unsupervised_views(payloads, task_type)
+    views = (*views, *_neural_error_views(workspace, run_id))
     worst_n = (
         predictions.sort_values(["score", "prediction"], ascending=False).head(WORST_N)
         if "score" in predictions.columns

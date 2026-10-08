@@ -121,4 +121,4 @@ Storage                datasets: Parquet · artifacts: models, metrics, metadata
 | Jobs | Process pool behind `JobQueue` interface |
 | Storage | Local disk (§10 layout) |
 | Charts | Plotly |
-| ML | scikit-learn, XGBoost, LightGBM, CatBoost, SHAP, Optuna, UMAP, statsmodels (+ PyTorch from Phase 7) |
+| ML | scikit-learn, XGBoost, LightGBM, CatBoost, SHAP, Optuna, UMAP, statsmodels (+ neural = scikit-learn MLP from Phase 7, no torch dependency) |

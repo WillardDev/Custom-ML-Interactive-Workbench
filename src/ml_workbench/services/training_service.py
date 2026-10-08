@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import secrets
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +22,7 @@ from sklearn.ensemble import (
     RandomForestClassifier,
     RandomForestRegressor,
 )
+from sklearn.exceptions import ConvergenceWarning
 from sklearn.linear_model import (
     Lasso,
     LinearRegression,
@@ -34,6 +36,7 @@ from sklearn.metrics import (
     calinski_harabasz_score,
     davies_bouldin_score,
     f1_score,
+    log_loss,
     matthews_corrcoef,
     mean_absolute_error,
     mean_squared_error,
@@ -46,7 +49,10 @@ from sklearn.model_selection import (
     ShuffleSplit,
     StratifiedKFold,
     TimeSeriesSplit,
+    train_test_split,
 )
+from sklearn.neighbors import LocalOutlierFactor
+from sklearn.neural_network import MLPClassifier, MLPRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
@@ -60,9 +66,10 @@ from ml_workbench.rules.metrics import (
     metric_plan,
     trustworthiness_coef,
 )
+from ml_workbench.rules.prediction import novelty_kwargs
 from ml_workbench.rules.split import cv_strategy
 from ml_workbench.rules.staleness import mark_downstream_stale
-from ml_workbench.rules.training import leaderboard_stats, log_fields
+from ml_workbench.rules.training import leaderboard_stats, log_fields, neural_training_plan
 from ml_workbench.services.preprocessing_service import apply_target_transform, build_pipeline
 from ml_workbench.services.workspace import Workspace, utc_now
 from ml_workbench.state import ModelRun, ProjectState, StepEntry
@@ -126,12 +133,16 @@ def _estimator_factory(spec: ModelSpec, task_type: str) -> Any:
         return RandomForestClassifier if classifier else RandomForestRegressor
     if spec.id == "hist_gradient_boosting":
         return HistGradientBoostingClassifier if classifier else HistGradientBoostingRegressor
+    if spec.id == "mlp":
+        return MLPClassifier if classifier else MLPRegressor
     if spec.id == "kmeans":
         return KMeans
     if spec.id == "pca":
         return PCA
     if spec.id == "isolation_forest":
         return IsolationForest
+    if spec.id == "lof":
+        return LocalOutlierFactor
     raise TrainingError(f"model '{spec.id}' has no training implementation yet")
 
 
@@ -141,6 +152,7 @@ def _accepts_random_state(spec: ModelSpec) -> bool:
         "decision_tree",
         "random_forest",
         "hist_gradient_boosting",
+        "mlp",
         "kmeans",
         "isolation_forest",
     }
@@ -160,6 +172,23 @@ def _translate_params(spec: ModelSpec, params: dict[str, object]) -> dict[str, A
     if spec.id == "hist_gradient_boosting" and cleaned.get("early_stopping_rounds") is not None:
         cleaned["early_stopping"] = True
         cleaned["n_iter_no_change"] = cleaned.pop("early_stopping_rounds")
+    if spec.id == "mlp":
+        # presets map to sklearn widths; patience/epochs drive the per-epoch loop.
+        preset = str(cleaned.pop("preset", "medium"))
+        cleaned["hidden_layer_sizes"] = {
+            "small": (64,),
+            "medium": (128, 64),
+            "large": (256, 128, 64),
+        }.get(preset, (128, 64))
+        if "optimizer" in cleaned:
+            cleaned["solver"] = cleaned.pop("optimizer")
+        if "learning_rate" in cleaned:
+            cleaned["learning_rate_init"] = float(cleaned.pop("learning_rate"))
+        if "weight_decay" in cleaned:
+            cleaned["alpha"] = float(cleaned.pop("weight_decay"))
+        if "epochs" in cleaned:
+            cleaned["max_iter"] = int(cleaned.pop("epochs"))
+        cleaned.pop("patience", None)
     if spec.id == "pca":
         # n_components wins; otherwise variance_target selects a variance-retaining PCA.
         if cleaned.get("n_components") is None and cleaned.get("variance_target") is not None:
@@ -173,7 +202,115 @@ def build_estimator(spec: ModelSpec, params: dict[str, object], task_type: str, 
     kwargs = _translate_params(spec, params)
     if _accepts_random_state(spec):
         kwargs["random_state"] = seed
+    kwargs.update(novelty_kwargs(spec.id))
     return factory(**kwargs)
+
+
+def fit_estimator(
+    spec: ModelSpec,
+    estimator: Any,
+    x: np.ndarray,
+    y: np.ndarray,
+    *,
+    task_type: str,
+    params: dict[str, object],
+    seed: int,
+    on_epoch: Callable[[int, float, float], None] | None = None,
+) -> dict[str, Any]:
+    """TRAIN-03: neural families train epoch-by-epoch in mini-batches with early stopping
+    on validation loss and the best-validation checkpoint restored. Returns the loss
+    curves; every other family fits in one call and returns an empty dict."""
+    if spec.family != "neural":
+        estimator.fit(x, y)
+        return {}
+    plan = neural_training_plan(dict(params))
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y)
+    train_idx, val_idx = _validation_split(x, y, task_type, plan["validation_fraction"], seed)
+    estimator.set_params(max_iter=1, warm_start=False, early_stopping=False)
+    best_val = float("inf")
+    best_epoch = -1
+    best_weights: tuple[list[np.ndarray], list[np.ndarray]] | None = None
+    no_improvement = 0
+    train_curve: list[float] = []
+    val_curve: list[float] = []
+    for epoch in range(1, plan["epochs"] + 1):
+        with warnings.catch_warnings():
+            # max_iter=1 per epoch is intentional; convergence happens across epochs.
+            warnings.filterwarnings("ignore", category=ConvergenceWarning)
+            estimator.fit(x[train_idx], y[train_idx])
+        estimator.set_params(warm_start=True)
+        train_loss = float(estimator.loss_curve_[-1])
+        val_loss = _validation_loss(estimator, x[val_idx], y[val_idx], task_type)
+        if val_loss is None:
+            val_loss = train_loss
+        train_curve.append(round(train_loss, 6))
+        val_curve.append(round(val_loss, 6))
+        if val_loss < best_val:
+            best_val = val_loss
+            best_epoch = epoch
+            no_improvement = 0
+            best_weights = (
+                [weights.copy() for weights in estimator.coefs_],
+                [bias.copy() for bias in estimator.intercepts_],
+            )
+        else:
+            no_improvement += 1
+        if on_epoch is not None:
+            on_epoch(epoch, train_loss, val_loss)
+        if no_improvement >= plan["patience"]:
+            break
+    if best_weights is not None:
+        estimator.coefs_, estimator.intercepts_ = best_weights
+    return {
+        "device": plan["device"],
+        "batch_size": plan["batch_size"],
+        "loss_curve": train_curve,
+        "val_loss_curve": val_curve,
+        "best_epoch": best_epoch,
+        "epochs_run": len(train_curve),
+        "epochs": plan["epochs"],
+        "patience": plan["patience"],
+        "stopped_early": len(train_curve) < plan["epochs"],
+    }
+
+
+def _validation_split(
+    x: np.ndarray, y: np.ndarray, task_type: str, fraction: float, seed: int
+) -> tuple[np.ndarray, np.ndarray]:
+    n = len(x)
+    n_val = int(round(n * fraction))
+    if n < 10 or n_val < 2 or n - n_val < 2:
+        return np.arange(n), np.empty(0, dtype=int)
+    stratify: np.ndarray | None = None
+    if task_type in CLASSIFICATION_TASK_TYPES:
+        _, counts = np.unique(y, return_counts=True)
+        if counts.min() >= 2 and n_val >= len(counts) and n - n_val >= len(counts):
+            stratify = y
+    index = np.arange(n)
+    try:
+        train_idx, val_idx = train_test_split(
+            index, test_size=n_val, random_state=seed, stratify=stratify
+        )
+    except ValueError:
+        train_idx, val_idx = train_test_split(index, test_size=n_val, random_state=seed)
+    return np.asarray(train_idx), np.asarray(val_idx)
+
+
+def _validation_loss(
+    estimator: Any, x_val: np.ndarray, y_val: np.ndarray, task_type: str
+) -> float | None:
+    if len(x_val) == 0:
+        return None
+    try:
+        if task_type in CLASSIFICATION_TASK_TYPES:
+            proba = np.asarray(estimator.predict_proba(x_val))
+            labels = getattr(estimator, "classes_", None)
+            return float(log_loss(y_val, proba, labels=labels))
+        predicted = np.asarray(estimator.predict(x_val), dtype=float)
+        return float(mean_squared_error(np.asarray(y_val, dtype=float), predicted))
+    except Exception:
+        return None
 
 
 def _preprocessing_choices(state: ProjectState) -> dict[str, Any]:
@@ -294,6 +431,7 @@ def _cv_scores(
     plan: MetricPlan,
     choices: dict[str, Any],
     seed: int,
+    params: dict[str, object],
 ) -> tuple[list[dict[str, float]], list[FoldScore]]:
     frame, task = state.frame, state.task
     assert frame is not None and task is not None and task.target is not None
@@ -321,7 +459,15 @@ def _cv_scores(
             )
         else:
             y_to_fit = y_train
-        estimator.fit(x_train, np.asarray(y_to_fit))
+        fit_estimator(
+            spec,
+            estimator,
+            np.asarray(x_train),
+            np.asarray(y_to_fit),
+            task_type=task_type,
+            params=params,
+            seed=seed,
+        )
         y_pred_val, proba_val = _classification_predict(estimator, x_test)
         if task_type == "regression" and target_transform is not None:
             y_pred_val = inverse_target(target_transform, y_pred_val)
@@ -477,7 +623,8 @@ def _fit_final_artifact(
     choices: dict[str, Any],
     run_id: str,
     seed: int,
-) -> Path:
+    params: dict[str, object],
+) -> tuple[Path, dict[str, Any]]:
     frame, task = state.frame, state.task
     assert frame is not None and task is not None
     split_indices = _read_split_indices(workspace, state)
@@ -504,19 +651,31 @@ def _fit_final_artifact(
         )
     elif task.learning_type == "supervised" and task.target is not None:
         y_to_fit = frame[task.target].iloc[train_idx]
-    combined = Pipeline([("preprocess", reporter.pipeline), ("model", estimator)])
+    train_info: dict[str, Any] = {}
     if task.learning_type == "unsupervised":
+        combined = Pipeline([("preprocess", reporter.pipeline), ("model", estimator)])
         combined.fit(frame.iloc[train_idx])
     else:
         assert y_to_fit is not None
-        combined.fit(frame.iloc[train_idx], np.asarray(y_to_fit))
+        x_train = reporter.pipeline.transform(frame.iloc[train_idx])
+        train_info = fit_estimator(
+            spec,
+            estimator,
+            np.asarray(x_train),
+            np.asarray(y_to_fit),
+            task_type=task.task_type,
+            params=params,
+            seed=seed,
+        )
+        # Assemble with the pre-fitted steps so the early-stopped checkpoint survives.
+        combined = Pipeline([("preprocess", reporter.pipeline), ("model", estimator)])
     run_dir = workspace.run_dir(run_id)
     run_dir.mkdir(parents=True, exist_ok=True)
     artifact = run_dir / "pipeline.joblib"
     joblib.dump(combined, artifact)
     if target_transform is not None:
         joblib.dump(target_transform, run_dir / "target_transform.joblib")
-    return artifact
+    return artifact, train_info
 
 
 def train_model(
@@ -565,14 +724,18 @@ def train_model(
             state, spec, estimator, plan, choices, run_seed
         )
     else:
-        raw_metrics, fold_scores = _cv_scores(state, spec, estimator, plan, choices, run_seed)
+        raw_metrics, fold_scores = _cv_scores(
+            state, spec, estimator, plan, choices, run_seed, params
+        )
     if not fold_scores:
         raise TrainingError("cross-validation produced no usable folds")
     stats = leaderboard_stats(raw_metrics, plan.primary)
     assert state.dataset is not None
     data_hash = state.dataset.data_hash
     run_id = run_id if run_id is not None else new_run_id()
-    artifact = _fit_final_artifact(state, workspace, spec, estimator, choices, run_id, run_seed)
+    artifact, train_info = _fit_final_artifact(
+        state, workspace, spec, estimator, choices, run_id, run_seed, params
+    )
     trained_at = utc_now()
     meta = {
         **_log_meta(state, spec, params, run_seed, plan, data_hash),
@@ -600,6 +763,9 @@ def train_model(
         "metrics": plan.metrics,
         "data_hash": data_hash,
     }
+    if train_info:
+        # TRAIN-03/ERR-08: per-epoch loss curves for neural runs.
+        metrics["neural"] = train_info
     meta_path = workspace.write_run_json(run_id, "meta.json", meta)
     metrics_path = workspace.write_run_json(run_id, "metrics.json", metrics)
     state.models = [model for model in state.models if model.run_id != run_id]
@@ -789,8 +955,14 @@ def tune_hyperparameters(
                 )
             else:
                 y_fit = state.frame[state.task.target].iloc[inner_train]
-            estimator.fit(
-                reporter.pipeline.transform(state.frame.iloc[inner_train]), np.asarray(y_fit)
+            fit_estimator(
+                spec,
+                estimator,
+                np.asarray(reporter.pipeline.transform(state.frame.iloc[inner_train])),
+                np.asarray(y_fit),
+                task_type=task_type,
+                params=params,
+                seed=state.seed,
             )
             y_val, proba_val = _classification_predict(
                 estimator, reporter.pipeline.transform(state.frame.iloc[inner_val])
@@ -832,7 +1004,7 @@ def _probe_score(
     trial's region; below-median regions are pruned before a full-budget fit."""
     assert state.frame is not None and state.task is not None and state.task.target is not None
     probe_params = dict(params)
-    for budget_param in ("max_iter", "n_estimators"):
+    for budget_param in ("max_iter", "n_estimators", "epochs"):
         if budget_param in probe_params:
             probe_params[budget_param] = max(20, int(probe_params[budget_param]) // 2)
             break
@@ -859,7 +1031,15 @@ def _probe_score(
             )
         else:
             y_fit = state.frame[state.task.target].iloc[fold_train]
-        probe.fit(reporter.pipeline.transform(state.frame.iloc[fold_train]), np.asarray(y_fit))
+        fit_estimator(
+            spec,
+            probe,
+            np.asarray(reporter.pipeline.transform(state.frame.iloc[fold_train])),
+            np.asarray(y_fit),
+            task_type=task_type,
+            params=probe_params,
+            seed=state.seed,
+        )
         y_val, proba_val = _classification_predict(
             probe, reporter.pipeline.transform(state.frame.iloc[probe_val])
         )

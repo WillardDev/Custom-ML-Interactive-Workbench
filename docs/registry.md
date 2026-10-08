@@ -90,11 +90,10 @@ Field notes:
 
 ## Neural network builder (§6.5 item 5, Phase 7)
 
-- Presets: Small / Medium / Large (layers, width, dropout).
-- Advanced: activation, optimizer, learning rate + scheduler, batch size, weight decay,
-  batch norm, epochs, patience.
-- Autoencoder family: bottleneck size + reconstruction loss.
-- Sequence models: window length + horizon.
+- Shipped (MLP, `family: neural`): presets Small / Medium / Large (layer widths), activation,
+  optimizer, learning rate, batch size, weight decay, epochs, patience (shown with early stopping).
+- Catalog-only until their phase: dropout/scheduler/batch-norm variants, autoencoder family
+  (bottleneck size + reconstruction loss), sequence models (window length + horizon).
 
 ## Guidance rule (§4.1, §13)
 

@@ -63,3 +63,24 @@ def job_routing(flags: dict[str, Any], accelerator_available: bool = False) -> t
     if flags.get("uses_gpu") and accelerator_available:
         return "gpu", "routed to GPU"
     return "cpu", "routed to CPU"
+
+
+def neural_training_plan(
+    params: dict[str, Any],
+    *,
+    uses_gpu: bool = False,
+    accelerator_available: bool = False,
+) -> dict[str, Any]:
+    """TRAIN-03: neural models train in mini-batches with early stopping on validation
+    loss, a per-epoch loss curve, and the best-validation checkpoint restored."""
+    device = job_routing({"uses_gpu": uses_gpu}, accelerator_available)[0]
+    return {
+        "device": device,
+        "batch_size": int(params.get("batch_size") or 64),
+        "epochs": int(params.get("epochs") or 100),
+        "patience": int(params.get("patience") or 10),
+        "validation_fraction": 0.1,
+        "early_stopping": "validation_loss",
+        "checkpoint": "best_validation_loss",
+        "loss_curve": True,
+    }

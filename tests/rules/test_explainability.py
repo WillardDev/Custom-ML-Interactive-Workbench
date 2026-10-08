@@ -4,11 +4,14 @@ import math
 import pytest
 
 from ml_workbench.rules.explainability import (
+    GRADIENT_STEPS,
     anomaly_explanation_panels,
     auto_explain_warnings,
     clustering_explanation_panels,
     embedding_explanation_panels,
     explain_cache_key,
+    gradient_explanation,
+    gradient_explanation_panels,
     kernel_explanation,
     linear_explanation,
     shap_runs_in_job,
@@ -47,9 +50,15 @@ def test_expl_kernel_on_sampled_background() -> None:
     assert without_shap["background_rows"] == 100
 
 
-@pytest.mark.skip(reason="neural gradient explainers arrive in Phase 7 (docs/rules.md EXPL-04)")
 def test_expl_neural_gradient_methods() -> None:
-    raise NotImplementedError("docs/rules.md EXPL-04")
+    plan = gradient_explanation()
+    assert plan["method"] == "integrated_gradients"
+    assert plan["baseline"] == "zeros"
+    assert plan["steps"] == GRADIENT_STEPS == 32
+    assert "attention maps" in plan["note"]
+    panels = gradient_explanation_panels()
+    assert panels["global"] == ["gradient_attributions"]
+    assert panels["local"] == ["gradient_local"]
 
 
 def test_expl_global_and_local_supervised() -> None:

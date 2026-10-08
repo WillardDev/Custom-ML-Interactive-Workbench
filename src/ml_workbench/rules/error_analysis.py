@@ -79,3 +79,42 @@ def anomaly_error_views() -> tuple[str, ...]:
 def common_error_tools() -> dict[str, bool]:
     """ERR-07: worst-N rows and segment slicing are available on any task."""
     return {"worst_n_rows": True, "segment_by_features": True}
+
+
+_NEURAL_VIEWS: tuple[str, ...] = (
+    "learning_curve",
+    "overfitting_diagnostics",
+    "per_epoch_metrics",
+)
+
+
+def neural_error_views() -> tuple[str, ...]:
+    """ERR-08: neural runs add learning curves, overfitting diagnostics and per-epoch metrics."""
+    return _NEURAL_VIEWS
+
+
+def neural_diagnostics(
+    train_loss: list[float],
+    val_loss: list[float],
+    *,
+    best_epoch: int,
+    epochs_run: int,
+    epochs: int,
+    patience: int,
+) -> dict[str, Any]:
+    """ERR-08: overfitting diagnostics derived from the per-epoch loss curves."""
+    final_train = float(train_loss[-1]) if train_loss else float("nan")
+    final_val = float(val_loss[-1]) if val_loss else float("nan")
+    best_val = float(val_loss[best_epoch - 1]) if 0 < best_epoch <= len(val_loss) else final_val
+    return {
+        "final_train_loss": final_train,
+        "final_val_loss": final_val,
+        "gap": final_val - final_train,
+        "best_epoch": best_epoch,
+        "best_val_loss": best_val,
+        "epochs_run": epochs_run,
+        "epochs": epochs,
+        "patience": patience,
+        "stopped_early": epochs_run < epochs,
+        "overfitting": bool(val_loss) and final_val > best_val,
+    }

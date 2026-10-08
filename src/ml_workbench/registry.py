@@ -7,7 +7,7 @@ from typing import Any
 
 import yaml
 
-CURRENT_PHASE: int = 6
+CURRENT_PHASE: int = 7
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_REGISTRY_PATH = REPO_ROOT / "registry" / "models.yaml"

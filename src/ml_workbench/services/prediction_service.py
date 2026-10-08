@@ -11,11 +11,16 @@ import pandas as pd
 
 from ml_workbench.registry import load_registry
 from ml_workbench.rules.metrics import (
+    CLASSIFICATION_TASK_TYPES,
     anomaly_labeled_scores,
     labeled_cluster_scores,
     metric_plan,
 )
-from ml_workbench.rules.prediction import calibration_curve, threshold_metrics
+from ml_workbench.rules.prediction import (
+    anomaly_scoring_plan,
+    calibration_curve,
+    threshold_metrics,
+)
 from ml_workbench.services.model_cache import ModelCache
 from ml_workbench.services.training_service import (
     _anomaly_decision,
@@ -107,9 +112,23 @@ def predict_frame(
                 f"train a surrogate nearest-centroid model instead"
             )
         return PredictionResult(df=result, has_proba=False)
+    if task is not None and task.task_type == "anomaly_detection":
+        # PRED-06: score every row (higher = more anomalous) and flag at the plan threshold.
+        plan = anomaly_scoring_plan(spec.id)
+        score = _anomaly_decision(
+            pipeline.named_steps["model"], _transform_matrix(pipeline, frame, features)
+        )
+        result["score"] = score
+        result["prediction"] = (score > float(plan["threshold"])).astype(int)
+        return PredictionResult(df=result, has_proba=False)
     y_pred = np.asarray(pipeline.predict(frame[features]))
     result["prediction"] = y_pred
-    has_proba = bool(spec.flags.get("has_proba"))
+    # has_proba is a model capability; only classifiers actually expose probabilities.
+    has_proba = (
+        bool(spec.flags.get("has_proba"))
+        and task is not None
+        and (task.task_type in CLASSIFICATION_TASK_TYPES)
+    )
     if has_proba:
         proba = np.asarray(pipeline.predict_proba(frame[features]))
         classes = getattr(pipeline.named_steps["model"], "classes_", [])
@@ -137,6 +156,8 @@ def predict_single(
     result = predict_frame(state, workspace, run_id, one_row, cache=cache)
     first = result.df.iloc[0]
     output: dict[str, object] = {"prediction": first["prediction"]}
+    if "score" in result.df.columns:
+        output["score"] = first["score"]
     if result.has_proba:
         for column in result.df.columns:
             if str(column).startswith("p_"):
@@ -183,7 +204,8 @@ def _evaluate_unsupervised(
             scores.update(labeled_cluster_scores(y_true, y_pred))
     elif task.task_type == "anomaly_detection":
         decision = _anomaly_decision(model, x_test)
-        y_pred = (decision > 0.0).astype(int)
+        threshold = float(anomaly_scoring_plan(spec.id)["threshold"])
+        y_pred = (decision > threshold).astype(int)
         if y_true is not None:
             scores.update(anomaly_labeled_scores(_binary_outlier_labels(y_true), decision))
     filtered = {
@@ -216,13 +238,16 @@ def evaluate_test(
     y_true = np.asarray(state.frame[state.task.target].iloc[test_idx])
     y_pred = np.asarray(pipeline.predict(test_frame[features]))
     proba: np.ndarray | None = None
-    if spec.flags.get("has_proba"):
+    has_proba = bool(spec.flags.get("has_proba")) and (
+        state.task.task_type in CLASSIFICATION_TASK_TYPES
+    )
+    if has_proba:
         proba = np.asarray(pipeline.predict_proba(test_frame[features]))
     else:
         inverse = _load_target_transform(workspace, run_id)
         if inverse is not None:
             y_pred = inverse_target(inverse, y_pred)
-    if spec.flags.get("has_proba"):
+    if has_proba:
         scores = classification_scores(y_true, y_pred, proba)
     else:
         scores = regression_scores(y_true, y_pred)

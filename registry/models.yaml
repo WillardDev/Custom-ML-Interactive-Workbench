@@ -288,7 +288,7 @@ models:
 
   - id: mlp
     name: MLP
-    library: torch
+    library: sklearn.neural_network
     tasks: [classification, regression]
     family: neural
     enabled_phase: 7
@@ -300,16 +300,37 @@ models:
       has_transform: false
       has_proba: true
       early_stopping: true
-      uses_gpu: true
+      uses_gpu: false
       viz_only: false
       explain_method: gradient
     hyperparameters:   # neural builder presets, design doc §6.5 item 5
       - {name: preset, type: enum, default: medium, options: [small, medium, large]}
-      - {name: dropout, type: float, default: 0.1, min: 0.0, max: 0.5}
-      - {name: optimizer, type: enum, default: adamw, options: [adam, adamw, sgd]}
+      - {name: activation, type: enum, default: relu, options: [relu, tanh, logistic]}
+      - {name: optimizer, type: enum, default: adam, options: [adam, sgd]}
       - {name: learning_rate, type: float, default: 0.001, min: 0.00001, max: 0.1, log: true}
       - {name: batch_size, type: enum, default: 64, options: [32, 64, 128, 256]}
       - {name: weight_decay, type: float, default: 0.0, min: 0.0, max: 0.1}
       - {name: epochs, type: int, default: 100, min: 10, max: 500}
       - {name: patience, type: int, default: 10, min: 1, max: 50,
          visible_when: {early_stopping: true}}
+
+  - id: lof
+    name: Local Outlier Factor
+    library: sklearn.neighbors
+    tasks: [anomaly_detection]
+    family: density
+    enabled_phase: 7
+    flags:
+      needs_scaling: true
+      handles_nan: false
+      needs_k: false
+      has_predict: true
+      has_transform: false
+      has_proba: false
+      early_stopping: false
+      uses_gpu: false
+      viz_only: false
+      explain_method: kernel_shap
+    hyperparameters:
+      - {name: n_neighbors, type: int, default: 20, min: 2, max: 100}
+      - {name: contamination, type: float, default: 0.05, min: 0.001, max: 0.5}

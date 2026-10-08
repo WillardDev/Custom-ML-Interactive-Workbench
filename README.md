@@ -27,7 +27,8 @@ Design source: *ML Workbench: Software Documentation v1.0 — Architecture and t
 | Phase 4 — Modelling, Training, Prediction | **complete — exit criteria met** |
 | Phase 5 — Error Analysis, Explainability, Outcome | **complete — exit criteria met** |
 | Phase 6 — Unsupervised (Clustering, Dim-Reduction, Anomaly) | **complete — exit criteria met** |
-| Phases 7–9 — Neural, Advanced, Production | not started |
+| Phase 7 — Neural networks + anomaly scoring | **complete — exit criteria met** |
+| Phases 8–9 — Time Series / Association, Production | not started |
 
 Current state: `docs/` and `registry/` hold the Phase 0 spec (124 rules, tab matrix, contracts);
 `src/` holds the foundation (project state, rules engine for gating/staleness, registry loader,
@@ -41,18 +42,21 @@ PRED-01..05, PERF-01..02, WARN-01..07), the Phase 5 error/explainability/outcome
 (ERR-01..03/07, EXPL-01..03/05/10/11, OUT-01, EXPORT-01/02, PERF-05, GATE-02/04), and the Phase 6
 unsupervised stack — KMeans clustering, PCA dimensionality reduction and Isolation-Forest anomaly
 detection with holdout scoring (METRIC-05..07), unsupervised EDA (EDA-05/06/07), error views
-(ERR-04/05/06), explanations (EXPL-06/07/08) and outcome packaging (OUT-02/03/04) — all checks
-green (ruff, mypy strict, rule-test sync, pytest).
+(ERR-04/05/06), explanations (EXPL-06/07/08) and outcome packaging (OUT-02/03/04), and the Phase 7
+neural/anomaly stack — MLP classifier + regressor with a per-epoch early-stopping training loop
+(TRAIN-03), anomaly scoring with threshold flagging and LOF novelty mode (PRED-06), neural error
+views (ERR-08) and Integrated-Gradients explanations (EXPL-04) — all checks green (ruff, mypy
+strict, rule-test sync, pytest).
 
 ## MVP scope (delivered in Phases 2–6)
 
 - Tasks: binary and multiclass classification, regression, clustering, dimensionality reduction and
   anomaly detection on tabular data
 - Models: linear baselines and gradient boosting (scikit-learn, XGBoost, LightGBM), KMeans, PCA,
-  Isolation Forest
+  Isolation Forest, MLP (classification/regression), Local Outlier Factor
 - All 10 workflow tabs present end-to-end: state, gating, staleness, step log, SHAP, report and script export
-- Deferred: neural networks (Phase 7), time series / autoencoders /
-  association rules / auto-compare (Phase 8), production hardening (Phase 9)
+- Deferred: time series / autoencoders / association rules / auto-compare (Phase 8), production
+  hardening (Phase 9)
 
 ## Phases
 
@@ -230,6 +234,35 @@ stays in sync.*
 error views and packaged outcomes; rule coverage green.
 → *met: `test_phase6_unsupervised.py` drives train → evaluate → predict → error → explain → outcome
 for all three task types; `scaffold_rule_tests --check` stays in sync.*
+
+#### Phase 7 — Neural networks + anomaly scoring ✅
+
+- [x] Neural builder presets (`TRAIN-03`): registry-driven `family: neural` form (preset → layer
+      widths, activation, optimizer, learning rate, batch size, weight decay, epochs, patience)
+      (`registry/models.yaml`, `ui/modelling_tab.py`)
+- [x] Neural training loop (`TRAIN-03`): per-epoch mini-batch fits with warm start, validation-loss
+      early stopping, best-epoch checkpoint restore, loss curves recorded in
+      `metrics.json["neural"]` (`src/ml_workbench/services/training_service.py`)
+- [x] MLP classifier + regressor (`enabled_phase: 7`): probability columns for classification only;
+      RMSE/MAE/R² for regression (`src/ml_workbench/services/prediction_service.py`)
+- [x] Anomaly scoring (PRED-06): `predict_frame` scores every row (`score`, higher = more anomalous)
+      and flags at the plan threshold; Prediction tab gets a threshold slider + flagged-rows table;
+      LOF trains in novelty mode (`novelty: true`) so it can score rows after fit
+- [x] Anomaly sign contract: error/outcome/explain services all use the shared negated decision
+      (higher = more anomalous), matching the OUT-04 contract in `docs/contracts.md`
+- [x] Neural error views (`ERR-08`): learning curve, overfitting diagnostics (final gap, best
+      epoch, early stop) and per-epoch metrics appended for neural runs on any task
+- [x] Gradient explanations (`EXPL-04`): `explain_method: gradient` → Integrated Gradients over
+      analytic MLP backprop (zero baseline, 32 steps) with global attributions + first-row local
+      panel; Deep/GradientExplainer SHAP and transformer attention maps noted as deep-backend work
+- [x] Rule tests implemented (TRAIN-03, PRED-06, ERR-08, EXPL-04) + service tests
+      (`tests/test_phase7_neural_anomaly.py`): neural classification/regression flows, anomaly
+      score/flag direction vs labels, LOF novelty scoring
+
+**Exit criteria:** an MLP trains, evaluates, errors and explains end-to-end; anomaly rows score and
+flag at an adjustable threshold; rule coverage green.
+→ *met: `test_phase7_neural_anomaly.py` drives train → evaluate → predict → error → explain for
+neural runs and anomaly/LOF scoring; `scaffold_rule_tests --check` stays in sync.*
 
 ### Implementation
 

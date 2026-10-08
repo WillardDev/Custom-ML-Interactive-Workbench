@@ -7,6 +7,8 @@ from ml_workbench.rules.error_analysis import (
     common_error_tools,
     dimred_error_views,
     error_view_plan,
+    neural_diagnostics,
+    neural_error_views,
 )
 
 
@@ -77,6 +79,26 @@ def test_err_common_tools_worst_n_segments() -> None:
     assert tools["segment_by_features"] is True
 
 
-@pytest.mark.skip(reason="neural diagnostics arrive in Phase 7 (docs/rules.md ERR-08)")
 def test_err_neural_diagnostics_added() -> None:
-    raise NotImplementedError("docs/rules.md ERR-08")
+    assert list(neural_error_views()) == [
+        "learning_curve",
+        "overfitting_diagnostics",
+        "per_epoch_metrics",
+    ]
+    diagnostics = neural_diagnostics(
+        [0.9, 0.5, 0.4],
+        [1.0, 0.6, 0.7],
+        best_epoch=2,
+        epochs_run=3,
+        epochs=10,
+        patience=5,
+    )
+    assert diagnostics["gap"] == pytest.approx(0.7 - 0.4)
+    assert diagnostics["best_val_loss"] == pytest.approx(0.6)
+    assert diagnostics["overfitting"] is True
+    assert diagnostics["stopped_early"] is True
+    stable = neural_diagnostics(
+        [0.9, 0.5], [1.0, 0.4], best_epoch=2, epochs_run=2, epochs=2, patience=5
+    )
+    assert stable["overfitting"] is False
+    assert stable["stopped_early"] is False

@@ -127,6 +127,8 @@ def test_anomaly_labeled_flow(prepared_workspace, anomaly_frame: pd.DataFrame) -
     confusion = next(v for v in report.views if str(v["view"]) == "false_positives_negatives")
     total = confusion["tp"] + confusion["fp"] + confusion["fn"] + confusion["tn"]
     assert total == len(report.predicted)
+    # higher score = more anomalous: labeled outliers land in TP, not FP.
+    assert confusion["tp"] >= 2 and confusion["fp"] <= 10
 
     explanation = explain_model(state, ws, run_id)
     panels = {panel["panel"] for panel in explanation.panels}
@@ -136,6 +138,9 @@ def test_anomaly_labeled_flow(prepared_workspace, anomaly_frame: pd.DataFrame) -
     assert (ws.outcome_dir / "flagged.csv").is_file()
     flagged = pd.read_csv(ws.outcome_dir / "flagged.csv")
     assert {"score", "flagged"} <= set(flagged.columns)
+    assert 10 <= int(flagged["flagged"].sum()) <= 40
+    # precision must be well enriched over the 10% outlier base rate.
+    assert flagged.loc[flagged["flagged"] == 1, "label"].mean() >= 0.5
     distribution = json.loads((ws.outcome_dir / "score_distribution.json").read_text())
     assert distribution["count"] == len(anomaly_frame)
     threshold = json.loads((ws.outcome_dir / "threshold.json").read_text())
