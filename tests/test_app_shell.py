@@ -20,6 +20,7 @@ def app(tmp_path: Path) -> AppTest:
 
 
 def _load_sample(app: AppTest) -> AppTest:
+    app.selectbox("data_sample").set_value("binary_classification.csv")
     app.button("data_load_sample").click().run()
     assert not app.exception
     return app

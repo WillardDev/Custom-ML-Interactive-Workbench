@@ -22,9 +22,11 @@ def render_eda_tab(state: ProjectState, workspace: Workspace) -> None:
     _render_base(state, report)
     _render_classification(state, report)
     _render_regression(state, task, report)
+    _render_timeseries(state, report)
     _render_clustering(state, report)
     _render_anomaly(state, report)
     _render_dimred(state, report)
+    _render_association(state, report)
     st.caption(
         "EDA views are read-only; upstream edits mark this tab stale "
         "(run Cleaning again to refresh)."
@@ -96,6 +98,32 @@ def _render_regression(state: ProjectState, task: TaskDefinition, report: EdaRes
         st.dataframe(report.regression.feature_scatter, hide_index=True, height=240)
 
 
+def _render_timeseries(state: ProjectState, report: EdaResult) -> None:
+    if report.timeseries is None:
+        return
+    ts = report.timeseries
+    st.subheader("Time-series views (EDA-04)")
+    st.caption(f"seasonal period {ts.period}")
+    st.markdown("**Decomposition (trend / seasonal / residual)**")
+    st.line_chart(
+        pd.DataFrame({"trend": ts.trend, "seasonal": ts.seasonal, "residual": ts.residual})
+    )
+    acf_column, pacf_column = st.columns(2)
+    with acf_column:
+        st.markdown("**ACF**")
+        st.bar_chart(ts.acf.set_index("lag")["acf"])
+    with pacf_column:
+        st.markdown("**PACF**")
+        st.bar_chart(ts.pacf.set_index("lag")["pacf"])
+    st.markdown("**Rolling statistics**")
+    st.line_chart(ts.rolling)
+    verdict = "stationary" if ts.stationary else "unit root likely (difference before modelling)"
+    st.caption(
+        f"ADF statistic {ts.stationarity_stat} vs 5% critical "
+        f"{ts.stationarity_critical} — {verdict}"
+    )
+
+
 def _render_clustering(state: ProjectState, report: EdaResult) -> None:
     if report.clustering is None:
         return
@@ -152,3 +180,17 @@ def _render_dimred(state: ProjectState, report: EdaResult) -> None:
         st.caption("VIF ≥ 10 indicates strong multicollinearity.")
     else:
         st.caption("VIF not computable with the current features.")
+
+
+def _render_association(state: ProjectState, report: EdaResult) -> None:
+    if report.association is None:
+        return
+    assoc = report.association
+    st.subheader("Association views (EDA-08)")
+    st.caption(f"{assoc.baskets} baskets, {assoc.unique_items} unique items")
+    st.markdown("**Item frequency (share of baskets)**")
+    if not assoc.item_frequency.empty:
+        st.bar_chart(assoc.item_frequency.set_index("item")["frequency"])
+    st.markdown("**Basket size distribution**")
+    if not assoc.basket_size.empty:
+        st.bar_chart(assoc.basket_size)

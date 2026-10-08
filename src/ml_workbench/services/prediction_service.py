@@ -19,6 +19,7 @@ from ml_workbench.rules.metrics import (
 from ml_workbench.rules.prediction import (
     anomaly_scoring_plan,
     calibration_curve,
+    forecast_horizon_plan,
     threshold_metrics,
 )
 from ml_workbench.services.model_cache import ModelCache
@@ -26,6 +27,7 @@ from ml_workbench.services.training_service import (
     _anomaly_decision,
     _binary_outlier_labels,
     classification_scores,
+    forecasting_scores,
     inverse_target,
     regression_scores,
     unsupervised_scores,
@@ -185,13 +187,20 @@ def _evaluate_unsupervised(
 ) -> TestEvaluation:
     assert state.frame is not None and state.task is not None
     task = state.task
-    test_idx = _test_indices(state)
     run, spec = _run_spec(state, run_id)
     pipeline = get_pipeline(workspace, run_id, cache)
-    test_frame = state.frame.iloc[test_idx]
-    features = feature_columns(task, state.frame)
-    x_test = _transform_matrix(pipeline, test_frame, features)
     model = pipeline.named_steps["model"]
+    features = feature_columns(task, state.frame)
+    if task.task_type == "association":
+        # Association mines on all baskets — score the fitted rules without a holdout.
+        x_all = _transform_matrix(pipeline, state.frame, features)
+        scores = unsupervised_scores("association", model, x_all)
+        plan = metric_plan("association")
+        filtered = {name: value for name, value in sorted(scores.items()) if name in plan.metrics}
+        return TestEvaluation(y_true=None, y_pred=None, y_proba=None, scores=filtered)
+    test_idx = _test_indices(state)
+    test_frame = state.frame.iloc[test_idx]
+    x_test = _transform_matrix(pipeline, test_frame, features)
     scores = unsupervised_scores(task.task_type, model, x_test)
     y_true: np.ndarray | None = None
     y_pred: np.ndarray | None = None
@@ -249,9 +258,44 @@ def evaluate_test(
             y_pred = inverse_target(inverse, y_pred)
     if has_proba:
         scores = classification_scores(y_true, y_pred, proba)
+    elif state.task.task_type == "forecasting":
+        scores = forecasting_scores(y_true, y_pred)
     else:
         scores = regression_scores(y_true, y_pred)
     return TestEvaluation(y_true=y_true, y_pred=y_pred, y_proba=proba, scores=scores)
+
+
+def forecast_frame(
+    state: ProjectState,
+    workspace: Workspace,
+    run_id: str,
+    horizon: int,
+    *,
+    cache: ModelCache | None = None,
+) -> pd.DataFrame:
+    """PRED-03: h-step-ahead point forecast with residual-quantile confidence bands."""
+    if state.frame is None or state.task is None or state.task.task_type != "forecasting":
+        raise PredictionError("forecasting needs a forecasting task with a trained run")
+    plan = forecast_horizon_plan(horizon)
+    run, _spec = _run_spec(state, run_id)
+    if not run.metrics_path:
+        raise PredictionError(f"run '{run_id}' has no metrics sidecar")
+    pipeline = get_pipeline(workspace, run_id, cache)
+    template = state.frame.iloc[[-1]]
+    future = pd.concat([template] * int(plan["horizon"]), ignore_index=True)
+    point = np.asarray(pipeline.predict(future), dtype=float)
+    payload = json.loads(Path(run.metrics_path).read_text())
+    bands = payload.get("forecast", {})
+    q05 = float(bands.get("residual_q05", 0.0))
+    q95 = float(bands.get("residual_q95", 0.0))
+    return pd.DataFrame(
+        {
+            "step": range(1, len(point) + 1),
+            "forecast": point.round(6),
+            "lower": (point + q05).round(6),
+            "upper": (point + q95).round(6),
+        }
+    )
 
 
 def threshold_eval(evaluation: TestEvaluation, threshold: float = 0.5) -> dict[str, float]:

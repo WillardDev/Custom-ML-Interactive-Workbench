@@ -7,7 +7,7 @@ from typing import Any
 
 import yaml
 
-CURRENT_PHASE: int = 7
+CURRENT_PHASE: int = 8
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_REGISTRY_PATH = REPO_ROOT / "registry" / "models.yaml"
@@ -27,10 +27,21 @@ REQUIRED_FLAGS = frozenset(
     }
 )
 EXPLAIN_METHODS = frozenset(
-    {"linear", "tree_shap", "kernel_shap", "gradient", "surrogate", "loadings"}
+    {"linear", "tree_shap", "kernel_shap", "gradient", "surrogate", "loadings", "forecast", "rules"}
 )
 FAMILIES = frozenset(
-    {"linear", "tree", "kernel", "distance", "centroid", "density", "hierarchical", "neural"}
+    {
+        "linear",
+        "tree",
+        "kernel",
+        "distance",
+        "centroid",
+        "density",
+        "hierarchical",
+        "neural",
+        "forecast",
+        "association",
+    }
 )
 
 

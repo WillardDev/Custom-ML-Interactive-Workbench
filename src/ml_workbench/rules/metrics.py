@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
+
+import numpy as np
 
 from ml_workbench.rules.modelling import MINORITY_FRACTION_THRESHOLD
 from ml_workbench.rules.preprocessing import SKEW_THRESHOLD
@@ -58,9 +61,9 @@ def metric_plan(
     if task_type == "forecasting":
         return MetricPlan(
             primary="mae",
-            metrics=("mae", "rmse", "mase"),
+            metrics=("mae", "rmse", "smape", "mase"),
             rule_id="METRIC-04",
-            note="time series: MAE, RMSE, MASE.",
+            note="time series: MAE primary, RMSE, sMAPE and MASE reported.",
         )
     if task_type == "clustering":
         if labeled:
@@ -140,3 +143,52 @@ def trustworthiness_coef(high_dim: object, low_dim: object, n_neighbors: int = 5
     except ValueError:
         return float("nan")
     return round(value, 6)
+
+
+def _rounded(values: dict[str, float]) -> dict[str, float]:
+    return {name: round(value, 6) for name, value in values.items()}
+
+
+def forecast_scores(
+    y_true: object,
+    y_pred: object,
+    *,
+    seasonal_period: int = 1,
+) -> dict[str, float]:
+    """METRIC-04: MAE, RMSE, MAPE/sMAPE and MASE for a holdout forecast.
+    MASE scales by the mean absolute seasonal-naive error of the holdout series."""
+    y = np.asarray(y_true, dtype=float).ravel().tolist()
+    p = np.asarray(y_pred, dtype=float).ravel().tolist()
+    n = min(len(y), len(p))
+    if n == 0:
+        return {name: float("nan") for name in ("mae", "rmse", "mape", "smape", "mase")}
+    y, p = y[:n], p[:n]
+    errors = [truth - pred for truth, pred in zip(y, p, strict=False)]
+    mae = math.fsum(abs(error) for error in errors) / n
+    rmse = math.sqrt(math.fsum(error * error for error in errors) / n)
+    nonzero = [
+        (abs(error), truth, pred)
+        for error, truth, pred in zip(errors, y, p, strict=False)
+        if abs(truth) > 1e-12
+    ]
+    if nonzero:
+        mape = (
+            100.0 * math.fsum(abs(error) / abs(truth) for error, truth, _ in nonzero) / len(nonzero)
+        )
+        smape = (
+            100.0
+            * math.fsum(
+                2.0 * abs(error) / (abs(truth) + abs(pred)) for error, truth, pred in nonzero
+            )
+            / len(nonzero)
+        )
+    else:
+        mape = float("nan")
+        smape = float("nan")
+    period = max(1, int(seasonal_period))
+    if n > period:
+        scale = math.fsum(abs(y[i] - y[i - period]) for i in range(period, n)) / (n - period)
+        mase = mae / scale if scale > 1e-12 else float("nan")
+    else:
+        mase = float("nan")
+    return _rounded({"mae": mae, "rmse": rmse, "mape": mape, "smape": smape, "mase": mase})

@@ -108,13 +108,19 @@ def explain_model(
             task.task_type, pipeline, list(x.columns), x, state
         )
     else:
-        if on_progress:
-            on_progress(0.2, f"running {spec.flags.get('explain_method')} explanation")
-        y = frame[task.target].iloc[x.index]
-        method = _method_for(spec, x, y, pipeline, on_progress)
-        panels, warnings = _explanations(
-            spec, pipeline, list(x.columns), x, y, method, background_rows, state
-        )
+        if spec.family == "forecast":
+            # Forecast models have no input features — the history trace is the explanation.
+            method = "history_trace"
+            panels = _forecast_explanations(state)
+            warnings = list(auto_explain_warnings(on_sample=len(x) < len(frame)))
+        else:
+            if on_progress:
+                on_progress(0.2, f"running {spec.flags.get('explain_method')} explanation")
+            y = frame[task.target].iloc[x.index]
+            method = _method_for(spec, x, y, pipeline, on_progress)
+            panels, warnings = _explanations(
+                spec, pipeline, list(x.columns), x, y, method, background_rows, state
+            )
 
     workspace.ensure()
     payload = {
@@ -163,6 +169,8 @@ def _unsupervised_method(spec: ModelSpec, task_type: str, model: Any) -> str:
         return "surrogate"
     if task_type == "dimensionality_reduction":
         return "loadings"
+    if task_type == "association":
+        return "rules"
     desired = str(spec.flags.get("explain_method"))
     if desired == "tree_shap" and shap_available():
         return "tree_shap"
@@ -188,6 +196,8 @@ def _unsupervised_explanations(
         panels = _clustering_explanation_panels(pipeline, x, x_scaled, feature_names, state)
     elif task_type == "dimensionality_reduction":
         panels = _dimred_explanation_panels(pipeline, x_scaled, feature_names)
+    elif task_type == "association":
+        panels = _association_explanation_panels(pipeline.named_steps["model"])
     else:
         panels = _anomaly_explanation_panels(pipeline, x, x_scaled, feature_names)
     warnings = list(auto_explain_warnings(importance_spread=False, on_sample=True))
@@ -354,6 +364,64 @@ def _dimred_explanation_panels(
             }
         )
     return panels
+
+
+def _association_explanation_panels(model: Any) -> list[dict[str, Any]]:
+    """EXPL-09: rule network, lift-vs-confidence scatter and a rules table."""
+    rules = list(getattr(model, "rules_", []))
+    nodes = sorted({item for rule in rules for item in (*rule["antecedent"], *rule["consequent"])})
+    edges = [
+        {
+            "source": " + ".join(rule["antecedent"]),
+            "target": " + ".join(rule["consequent"]),
+            "lift": rule["lift"],
+            "confidence": rule["confidence"],
+        }
+        for rule in rules[:100]
+    ]
+    scatter = [
+        {
+            "confidence": rule["confidence"],
+            "lift": rule["lift"],
+            "support": rule["support"],
+            "rule": " => ".join((" + ".join(rule["antecedent"]), " + ".join(rule["consequent"]))),
+        }
+        for rule in rules
+    ]
+    table = [
+        {
+            "antecedent": " + ".join(rule["antecedent"]),
+            "consequent": " + ".join(rule["consequent"]),
+            "support": rule["support"],
+            "confidence": rule["confidence"],
+            "lift": rule["lift"],
+        }
+        for rule in rules[:20]
+    ]
+    return [
+        {"panel": "rule_network", "nodes": nodes, "edges": edges},
+        {"panel": "lift_vs_confidence", "points": scatter},
+        {"panel": "rule_table", "table": table},
+    ]
+
+
+def _forecast_explanations(state: ProjectState) -> list[dict[str, Any]]:
+    frame, task = state.frame, state.task
+    assert frame is not None and task is not None and task.target is not None
+    series = pd.to_numeric(frame[task.target], errors="coerce").dropna()
+    trace = [
+        {"index": str(index), "value": round(float(value), 6)}
+        for index, value in series.tail(500).items()
+    ]
+    return [
+        {
+            "panel": "history_trace",
+            "table": trace,
+            "note": (
+                "forecast models have no input features — the target history is the explanation"
+            ),
+        }
+    ]
 
 
 def _anomaly_explanation_panels(

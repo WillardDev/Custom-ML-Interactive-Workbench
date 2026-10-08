@@ -63,6 +63,8 @@ def prepared_workspace(tmp_path):
         task_type: str = "binary",
         learning_type: str = "supervised",
         eval_labels: str | None = None,
+        time_column: str | None = None,
+        confirm_forecasting: bool = False,
         options=None,
     ):
         from ml_workbench.rules.task import build_task
@@ -98,7 +100,14 @@ def prepared_workspace(tmp_path):
                 eval_labels=eval_labels,
             )
         else:
-            state.task = build_task(frame, "supervised", target=target, task_type=task_type)
+            state.task = build_task(
+                frame,
+                "supervised",
+                target=target,
+                task_type=task_type,
+                time_column=time_column,
+                confirm_forecasting=confirm_forecasting,
+            )
         run_preprocessing(state, ws, options or PreprocessingOptions())
         return state, ws
 

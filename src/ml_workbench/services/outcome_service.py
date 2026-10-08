@@ -295,6 +295,16 @@ def build_unsupervised_outcome(
         threshold_path = outcome / "threshold.json"
         threshold_path.write_text(_json(threshold_payload(0.0, "anomaly_detection")))
         files.append(threshold_path)
+    elif task_type == "association":
+        # OUT-05: the mined rules table is the association deliverable.
+        model = joblib.load(source).named_steps["model"]
+        rules = pd.DataFrame(getattr(model, "rules_", []))
+        if not rules.empty:
+            rules["antecedent"] = rules["antecedent"].map(lambda ante: " + ".join(ante))
+            rules["consequent"] = rules["consequent"].map(lambda conc: " + ".join(conc))
+        rules_path = outcome / "rules.csv"
+        rules.to_csv(rules_path, index=False)
+        files.append(rules_path)
 
     card_path = outcome / "model_card.json"
     card_path.write_text(_json(_model_card(spec, meta, metrics, data_hash, list(declared))))

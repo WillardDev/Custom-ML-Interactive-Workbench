@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 from pandas.api.types import is_numeric_dtype
 
@@ -12,6 +15,7 @@ from ml_workbench.services.prediction_service import (
     PredictionError,
     calibration,
     evaluate_test,
+    forecast_frame,
     predict_frame,
     predict_single,
     threshold_eval,
@@ -53,6 +57,8 @@ def render_prediction_tab(state: ProjectState, workspace: Workspace) -> None:
         _render_binary(state, evaluation, run_id)
     elif state.task.task_type == "anomaly_detection":
         _render_anomaly(state, workspace, run_id)
+    elif state.task.task_type == "forecasting":
+        _render_forecasting(state, workspace, run_id, evaluation)
     elif state.task.learning_type == "unsupervised":
         _render_unsupervised(state, workspace, run_id, evaluation)
     else:
@@ -143,6 +149,52 @@ def _render_regression(state: ProjectState, evaluation: Any, run_id: str) -> Non
     ].round(4)
     st.markdown("##### Predicted vs actual (first 200 test rows)")
     st.dataframe(table.head(200), use_container_width=True)
+
+
+def _render_forecasting(
+    state: ProjectState,
+    workspace: Workspace,
+    run_id: str,
+    evaluation: Any,
+) -> None:
+    st.markdown("##### Holdout forecast accuracy (METRIC-04)")
+    st.table(pd.DataFrame([evaluation.scores], index=["value"]).T.round(4))
+
+    run = next((model for model in state.models if model.run_id == run_id), None)
+    payload: dict[str, Any] = {}
+    if run is not None and run.metrics_path:
+        payload = json.loads(Path(run.metrics_path).read_text()).get("forecast", {})
+    if payload.get("backtest"):
+        st.markdown("##### Expanding-window backtest (PRED-03)")
+        st.dataframe(pd.DataFrame(payload["backtest"]), hide_index=True)
+        st.caption(
+            f"90% bands from backtest residual quantiles "
+            f"(q05={payload.get('residual_q05')}, q95={payload.get('residual_q95')})"
+        )
+
+    horizon = st.slider("Forecast horizon (PRED-03)", 1, 48, 12, key="forecast_horizon")
+    if st.button("Forecast ahead", key="forecast_run"):
+        try:
+            frame = forecast_frame(state, workspace, run_id, horizon, cache=MODEL_CACHE)
+        except PredictionError as exc:
+            st.error(str(exc))
+        else:
+            st.markdown(f"##### Next {horizon} steps with 90% residual bands")
+            st.dataframe(frame, hide_index=True)
+            figure = go.Figure()
+            figure.add_scatter(
+                x=frame["step"], y=frame["forecast"], mode="lines+markers", name="forecast"
+            )
+            figure.add_scatter(x=frame["step"], y=frame["upper"], mode="lines", name="upper")
+            figure.add_scatter(
+                x=frame["step"],
+                y=frame["lower"],
+                mode="lines",
+                name="lower",
+                fill="tonexty",
+            )
+            figure.update_layout(xaxis_title="step ahead", yaxis_title="forecast")
+            st.plotly_chart(figure, use_container_width=True)
 
 
 def _render_single_row(state: ProjectState, workspace: Workspace, run_id: str) -> None:

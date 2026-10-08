@@ -3,10 +3,14 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from ml_workbench.rules.association import recommend_items
 from ml_workbench.rules.prediction import (
     anomaly_scoring_plan,
     apply_threshold,
+    backtest_folds,
     calibration_curve,
+    confidence_bands,
+    forecast_horizon_plan,
     needs_surrogate,
     novelty_kwargs,
     prediction_interval,
@@ -41,9 +45,26 @@ def test_pred_regression_intervals() -> None:
     assert np.all(upper > predictions)
 
 
-@pytest.mark.skip(reason="forecasting horizon/backtest arrives in Phase 8 (docs/rules.md PRED-03)")
 def test_pred_forecast_horizon_backtest() -> None:
-    raise NotImplementedError("docs/rules.md PRED-03")
+    plan = forecast_horizon_plan(12)
+    assert plan["horizon"] == 12
+    assert plan["max_horizon"] == 48
+    assert plan["bands"] == "residual_quantiles"
+    assert plan["backtest"] == "expanding_window"
+    assert forecast_horizon_plan(999)["horizon"] == 48
+    assert forecast_horizon_plan(0)["horizon"] == 1
+
+    point = np.array([10.0, 11.0, 12.0])
+    residuals = np.array([-1.0, -0.5, 0.5, 1.0])
+    lower, upper = confidence_bands(point, residuals, alpha=0.5)
+    assert np.all(lower < point) and np.all(point < upper)
+    # alpha=0.5 -> q25/q75 of [-1, -0.5, 0.5, 1] = [-0.625, 0.625], width 1.25.
+    assert np.allclose(upper - lower, 1.25)
+
+    folds = backtest_folds(40, n_splits=3)
+    assert len(folds) == 3
+    assert folds[0][0] < folds[0][1] <= folds[1][0] < folds[1][1] <= folds[2][1] == 40
+    assert backtest_folds(3) == []
 
 
 def test_pred_clustering_surrogate_fallback() -> None:
@@ -70,6 +91,28 @@ def test_pred_anomaly_lof_novelty_only() -> None:
     assert novelty_kwargs("lof") == {"novelty": True}
 
 
-@pytest.mark.skip(reason="association rules arrive in Phase 8 (docs/rules.md PRED-07)")
 def test_pred_basket_recommendations() -> None:
-    raise NotImplementedError("docs/rules.md PRED-07")
+    rules = [
+        {
+            "antecedent": ("milk",),
+            "consequent": ("bread",),
+            "support": 0.3,
+            "confidence": 0.8,
+            "lift": 1.6,
+        },
+        {
+            "antecedent": ("eggs",),
+            "consequent": ("butter",),
+            "support": 0.2,
+            "confidence": 0.5,
+            "lift": 1.1,
+        },
+    ]
+    ranked = recommend_items(["milk", "eggs"], rules)
+    assert [row["item"] for row in ranked] == ["bread", "butter"]
+    assert ranked[0]["score"] == pytest.approx(1.6 * 0.8)
+
+    # A consequent already in the basket is never recommended.
+    assert recommend_items(["milk", "bread"], rules) == []
+    # Antecedents that are not fully satisfied do not fire.
+    assert recommend_items(["bread"], rules) == []

@@ -126,14 +126,29 @@ def anomaly_explanation_panels() -> dict[str, list[str]]:
     }
 
 
+def association_explanation_panels() -> dict[str, list[str]]:
+    """EXPL-09: association rules explain with a rule network and lift-vs-confidence."""
+    return {
+        "global": ["rule_network", "lift_vs_confidence"],
+        "local": ["rule_table"],
+    }
+
+
+def forecast_explanation_panels() -> dict[str, list[str]]:
+    """Forecast models have no input features to perturb — explain with the history trace."""
+    return {"global": ["history_trace"], "local": []}
+
+
 def unsupervised_explanation_panels(task_type: str) -> dict[str, list[str]]:
-    """EXPL-06..08: the explanation panel set for an unsupervised task."""
+    """EXPL-06..09: the explanation panel set for an unsupervised task."""
     if task_type == "clustering":
         return clustering_explanation_panels()
     if task_type == "dimensionality_reduction":
         return embedding_explanation_panels()
     if task_type == "anomaly_detection":
         return anomaly_explanation_panels()
+    if task_type == "association":
+        return association_explanation_panels()
     return {}
 
 

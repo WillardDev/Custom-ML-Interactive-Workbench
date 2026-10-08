@@ -143,6 +143,18 @@ def build_pipeline(
     numeric, categorical = _column_groups(frame, task)
     train_frame = frame.iloc[train_indices]
 
+    if task.task_type == "association":
+        # Association mines raw item strings — skip encoding/scaling entirely.
+        passthrough = Pipeline([("columns", ColumnTransformer([], remainder="passthrough"))])
+        passthrough.fit(train_frame)
+        return PipelineReport(
+            pipeline=passthrough,
+            numeric_columns=(),
+            categorical_columns=(),
+            encoder=encoder,
+            scaler=scaler,
+        )
+
     transformers: list[tuple[str, object, list[str]]] = []
     if numeric:
         numeric_steps: list[tuple[str, object]] = [("imputer", SimpleImputer(strategy="median"))]

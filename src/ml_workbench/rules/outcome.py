@@ -46,14 +46,25 @@ def anomaly_deliverables() -> tuple[dict[str, str], ...]:
     )
 
 
+def association_deliverables() -> tuple[dict[str, str], ...]:
+    """OUT-05: an association outcome ships the mined rules table."""
+    return (
+        {"deliverable": "refit_pipeline", "path": "outcome/pipeline.joblib"},
+        {"deliverable": "rules_table", "path": "outcome/rules.csv"},
+        {"deliverable": "model_card", "path": "outcome/model_card.json"},
+    )
+
+
 def outcome_deliverables(task_type: str) -> tuple[dict[str, str], ...]:
-    """OUT-01..04: the deliverable manifest by task type."""
+    """OUT-01..05: the deliverable manifest by task type."""
     if task_type == "clustering":
         return clustering_deliverables()
     if task_type == "dimensionality_reduction":
         return dimred_deliverables()
     if task_type == "anomaly_detection":
         return anomaly_deliverables()
+    if task_type == "association":
+        return association_deliverables()
     return supervised_deliverables()
 
 

@@ -334,3 +334,89 @@ models:
     hyperparameters:
       - {name: n_neighbors, type: int, default: 20, min: 2, max: 100}
       - {name: contamination, type: float, default: 0.05, min: 0.001, max: 0.5}
+
+  # ---------- Phase 8: forecasting ----------
+  - id: naive
+    name: Naive Forecast
+    library: ml_workbench
+    tasks: [forecasting]
+    family: forecast
+    enabled_phase: 8
+    flags:
+      needs_scaling: false
+      handles_nan: false
+      needs_k: false
+      has_predict: true
+      has_transform: false
+      has_proba: false
+      early_stopping: false
+      uses_gpu: false
+      viz_only: false
+      explain_method: forecast
+    hyperparameters: []
+
+  - id: seasonal_naive
+    name: Seasonal Naive Forecast
+    library: ml_workbench
+    tasks: [forecasting]
+    family: forecast
+    enabled_phase: 8
+    flags:
+      needs_scaling: false
+      handles_nan: false
+      needs_k: false
+      has_predict: true
+      has_transform: false
+      has_proba: false
+      early_stopping: false
+      uses_gpu: false
+      viz_only: false
+      explain_method: forecast
+    hyperparameters:
+      - {name: period, type: int, default: 12, min: 2, max: 366}
+
+  - id: lag_boosting
+    name: Lag-Feature Boosting
+    library: ml_workbench
+    tasks: [forecasting]
+    family: forecast
+    enabled_phase: 8
+    flags:
+      needs_scaling: false
+      handles_nan: false
+      needs_k: false
+      has_predict: true
+      has_transform: false
+      has_proba: false
+      early_stopping: false
+      uses_gpu: false
+      viz_only: false
+      explain_method: forecast
+    hyperparameters:
+      - {name: lags, type: int, default: 12, min: 2, max: 100}
+      - {name: learning_rate, type: float, default: 0.1, min: 0.01, max: 0.5, log: true}
+      - {name: max_iter, type: int, default: 100, min: 10, max: 1000}
+
+  # ---------- Phase 8: association ----------
+  - id: apriori
+    name: Apriori Association Rules
+    library: ml_workbench
+    tasks: [association]
+    family: association
+    enabled_phase: 8
+    flags:
+      needs_scaling: false
+      handles_nan: true
+      needs_k: false
+      has_predict: true
+      has_transform: false
+      has_proba: false
+      early_stopping: false
+      uses_gpu: false
+      viz_only: false
+      explain_method: rules
+    hyperparameters:
+      - {name: min_support, type: float, default: 0.1, min: 0.01, max: 1.0}
+      - {name: min_confidence, type: float, default: 0.3, min: 0.01, max: 1.0}
+      - {name: min_lift, type: float, default: 1.0, min: 0.5, max: 10.0}
+      - {name: max_len, type: int, default: 3, min: 2, max: 4}

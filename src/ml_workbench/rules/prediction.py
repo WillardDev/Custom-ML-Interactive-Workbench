@@ -91,3 +91,58 @@ def novelty_kwargs(model_id: str) -> dict[str, Any]:
     if model_id in NOVELTY_ONLY_MODELS:
         return {"novelty": True}
     return {}
+
+
+MAX_FORECAST_HORIZON: int = 48
+FORECAST_ALPHA: float = 0.05
+
+
+def forecast_horizon_plan(
+    horizon: int = 12, *, max_horizon: int = MAX_FORECAST_HORIZON
+) -> dict[str, Any]:
+    """PRED-03: horizon selector with residual-quantile bands and an expanding backtest."""
+    return {
+        "horizon": max(1, min(int(horizon), int(max_horizon))),
+        "max_horizon": int(max_horizon),
+        "alpha": FORECAST_ALPHA,
+        "bands": "residual_quantiles",
+        "backtest": "expanding_window",
+    }
+
+
+def confidence_bands(
+    point_forecast: np.ndarray,
+    residuals: np.ndarray,
+    alpha: float = FORECAST_ALPHA,
+) -> tuple[np.ndarray, np.ndarray]:
+    """PRED-03: constant-width bands from residual quantiles (lower, upper)."""
+    point = np.asarray(point_forecast, dtype=float)
+    residuals = np.asarray(residuals, dtype=float)
+    if residuals.size == 0:
+        return point.copy(), point.copy()
+    lower = point + float(np.quantile(residuals, alpha / 2.0))
+    upper = point + float(np.quantile(residuals, 1.0 - alpha / 2.0))
+    return lower, upper
+
+
+def backtest_folds(
+    n_rows: int,
+    *,
+    n_splits: int = 3,
+    min_train_fraction: float = 0.4,
+) -> list[tuple[int, int]]:
+    """PRED-03: expanding-window backtest cuts (train_end, test_end) over the tail."""
+    if n_rows < 4 or n_splits < 1:
+        return []
+    first = max(2, int(n_rows * min_train_fraction))
+    usable = n_rows - first
+    if usable < n_splits:
+        return []
+    test_size = max(1, usable // n_splits)
+    cuts: list[tuple[int, int]] = []
+    for fold in range(n_splits):
+        start = first + fold * test_size
+        end = n_rows if fold == n_splits - 1 else start + test_size
+        if end > start:
+            cuts.append((start, end))
+    return cuts

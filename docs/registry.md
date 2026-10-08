@@ -28,11 +28,11 @@ behaviour is defined.
 |---|---|---|---|
 | Classification | Logistic Regression, Naive Bayes, KNN, SVM, Decision Tree, Random Forest, Extra Trees, Gradient Boosting, HistGradientBoosting, XGBoost, LightGBM, CatBoost | MLP, TabNet, FT-Transformer, ResNet-style tabular net, 1D-CNN | Phase 4 (linear + boosted first) / Phase 7 |
 | Regression | Linear, Ridge, Lasso, ElasticNet, SVR, KNN, Random Forest, Gradient Boosting, XGBoost, LightGBM, CatBoost | MLP, TabNet, FT-Transformer, ResNet-style tabular net | Phase 4 / Phase 7 |
-| Time series | ARIMA/SARIMA, ETS, Prophet, lag-feature boosting | LSTM, GRU, Temporal CNN, N-BEATS, TFT | Phase 8 |
+| Time series | Naive, Seasonal Naive, lag-feature boosting (shipped); ARIMA/SARIMA, ETS, Prophet (catalog) | LSTM, GRU, Temporal CNN, N-BEATS, TFT | Phase 8 |
 | Clustering | K-Means, MiniBatch K-Means, GMM, Agglomerative, DBSCAN, HDBSCAN, Spectral, BIRCH, K-Prototypes | SOM, Deep Embedded Clustering | Phase 6 |
 | Dim. reduction | PCA, Kernel PCA, TruncatedSVD, NMF, UMAP, t-SNE | Autoencoder, VAE | Phase 6 / Phase 7 |
 | Anomaly detection | Isolation Forest, LOF, One-Class SVM, Elliptic Envelope, GMM density | Autoencoder reconstruction error, Deep SVDD | Phase 6 / Phase 7 |
-| Association rules | Apriori, FP-Growth | n/a | Phase 8 |
+| Association rules | Apriori (shipped); FP-Growth (catalog) | n/a | Phase 8 |
 
 Phase 6 implementation (`registry/models.yaml`, `enabled_phase: 6`):
 - `kmeans` — clustering, `family: centroid`, `has_predict`, `explain_method: surrogate`;
@@ -42,6 +42,18 @@ Phase 6 implementation (`registry/models.yaml`, `enabled_phase: 6`):
   component count from the other.
 - `isolation_forest` — anomaly detection, `family: tree`, `has_predict`, `explain_method: tree_shap`;
   params `n_estimators` (200), `contamination` (0.001–0.5), `max_features` (1.0).
+
+Phase 8 implementation (`registry/models.yaml`, `enabled_phase: 8`, `library: ml_workbench`):
+- `naive` — forecasting, `family: forecast`, `has_predict`, `explain_method: forecast`;
+  no hyperparameters (last-value baseline).
+- `seasonal_naive` — forecasting, `family: forecast`, `has_predict`, `explain_method: forecast`;
+  param `period` (nullable int, resolved from the EDA seasonal estimate when null).
+- `lag_boosting` — forecasting, `family: forecast`, `has_predict`, `explain_method: forecast`;
+  params `lags` (12), `learning_rate` (0.1), `max_iter` (200) — HistGradientBoosting on lag
+  windows of the target.
+- `apriori` — association, `family: association`, `has_predict`, `explain_method: rules`;
+  params `min_support` (0.1), `min_confidence` (0.3), `min_lift` (1.0), `max_len` (3) — pure
+  Python rule mining (`rules/association.py`); `predict` recommends items per basket.
 
 ## YAML entry schema (`registry/models.yaml`)
 
@@ -95,6 +107,12 @@ Field notes:
 - Catalog-only until their phase: dropout/scheduler/batch-norm variants, autoencoder family
   (bottleneck size + reconstruction loss), sequence models (window length + horizon).
 
+## Forecast/association builder (§6.5 item 5, Phase 8)
+
+- Shipped: `seasonal_naive` shows `period`; `lag_boosting` shows `lags` / `learning_rate` /
+  `max_iter`; `apriori` shows `min_support` / `min_confidence` / `min_lift` / `max_len`.
+- All four use `library: ml_workbench` — no external forecasting/association packages.
+
 ## Guidance rule (§4.1, §13)
 
 On small tabular datasets (≈ under 10–50k rows), gradient boosting usually matches or beats neural
@@ -109,4 +127,4 @@ on small data (`WARN-06`).
 - A model's `hyperparameters` schema must be complete before it is enabled — otherwise it stays
   catalog-only (documented in the catalog table above).
 - MVP entries with full schemas are in `registry/models.yaml`; schemas for the remaining models
-  are written in the phase that enables them (6, 7, 8).
+  are written in the phase that enables them (9).

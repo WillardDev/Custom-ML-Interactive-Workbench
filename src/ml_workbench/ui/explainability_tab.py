@@ -155,6 +155,15 @@ def _render_report(report: Any) -> None:
             st.dataframe(pd.DataFrame(panel["table"]).round(4), use_container_width=True)
             if panel.get("note"):
                 st.caption(panel["note"])
+        elif name == "history_trace":
+            _render_history_trace(panel)
+        elif name == "rule_network":
+            _render_rule_network(panel)
+        elif name == "lift_vs_confidence":
+            _render_lift_confidence(panel)
+        elif name == "rule_table":
+            st.markdown("##### Mined rules (EXPL-09)")
+            st.dataframe(pd.DataFrame(panel["table"]), use_container_width=True)
 
     if report.warnings:
         for warning in report.warnings:
@@ -182,6 +191,44 @@ def _render_pdp(panel: dict[str, Any]) -> None:
                 break
         fig.update_layout(xaxis_title=str(curve["feature"]), yaxis_title="prediction")
         st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_history_trace(panel: dict[str, Any]) -> None:
+    st.markdown("##### Target history trace")
+    table = pd.DataFrame(panel.get("table") or [])
+    if not table.empty:
+        st.line_chart(table.set_index("index")["value"])
+    if panel.get("note"):
+        st.caption(panel["note"])
+
+
+def _render_rule_network(panel: dict[str, Any]) -> None:
+    st.markdown("##### Rule network (EXPL-09)")
+    edges = panel.get("edges") or []
+    st.caption(f"{len(panel.get('nodes') or [])} items, {len(edges)} rule edges")
+    if edges:
+        st.dataframe(pd.DataFrame(edges), use_container_width=True)
+
+
+def _render_lift_confidence(panel: dict[str, Any]) -> None:
+    st.markdown("##### Lift vs confidence (EXPL-09)")
+    points = pd.DataFrame(panel.get("points") or [])
+    if points.empty:
+        st.caption("No rules mined — lower the support/confidence thresholds.")
+        return
+    fig = go.Figure(
+        go.Scatter(
+            x=points["confidence"],
+            y=points["lift"],
+            mode="markers",
+            text=points["rule"],
+            marker={"size": 10},
+        )
+    )
+    fig.add_hline(y=1.0, line_dash="dot")
+    fig.update_layout(xaxis_title="confidence", yaxis_title="lift")
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption("lift > 1 means the combination appears more often than chance.")
 
 
 def _format_model(trained: list[Any], run_id: str) -> str:

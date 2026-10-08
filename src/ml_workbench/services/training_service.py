@@ -13,6 +13,7 @@ import joblib
 import numpy as np
 import pandas as pd
 import sklearn
+from sklearn.base import BaseEstimator, RegressorMixin, clone
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.ensemble import (
@@ -58,15 +59,17 @@ from sklearn.preprocessing import FunctionTransformer
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 
 from ml_workbench.registry import ModelSpec, load_registry
+from ml_workbench.rules.association import association_rule_stats, mine_rules, recommend_items
 from ml_workbench.rules.eda import skew
 from ml_workbench.rules.metrics import (
     MetricPlan,
     anomaly_labeled_scores,
+    forecast_scores,
     labeled_cluster_scores,
     metric_plan,
     trustworthiness_coef,
 )
-from ml_workbench.rules.prediction import novelty_kwargs
+from ml_workbench.rules.prediction import backtest_folds, novelty_kwargs
 from ml_workbench.rules.split import cv_strategy
 from ml_workbench.rules.staleness import mark_downstream_stale
 from ml_workbench.rules.training import leaderboard_stats, log_fields, neural_training_plan
@@ -77,6 +80,184 @@ from ml_workbench.state import ModelRun, ProjectState, StepEntry
 
 class TrainingError(ValueError):
     pass
+
+
+class NaiveForecaster(BaseEstimator, RegressorMixin):  # type: ignore[misc]
+    """PRED-03 baseline: every future step repeats the last observed value."""
+
+    def fit(self, x: Any, y: Any) -> NaiveForecaster:
+        values = np.asarray(y, dtype=float)
+        if values.size == 0:
+            raise TrainingError("naive forecast needs at least one training row")
+        self.history_ = values
+        return self
+
+    def predict(self, x: Any) -> np.ndarray:
+        return np.full(len(np.asarray(x)), float(self.history_[-1]))
+
+
+class SeasonalNaiveForecaster(BaseEstimator, RegressorMixin):  # type: ignore[misc]
+    """PRED-03 baseline: future steps repeat the value from one season ago."""
+
+    def __init__(self, period: int = 12) -> None:
+        self.period = period
+
+    def fit(self, x: Any, y: Any) -> SeasonalNaiveForecaster:
+        values = np.asarray(y, dtype=float)
+        if values.size == 0:
+            raise TrainingError("seasonal naive forecast needs at least one training row")
+        self.history_ = values
+        return self
+
+    def predict(self, x: Any) -> np.ndarray:
+        horizon = len(np.asarray(x))
+        period = min(max(1, int(self.period)), len(self.history_))
+        return np.asarray(
+            [self.history_[-period + (step % period)] for step in range(horizon)],
+            dtype=float,
+        )
+
+
+class LagBoostRegressor(BaseEstimator, RegressorMixin):  # type: ignore[misc]
+    """Lag-feature boosting: gradient boosting on y-lags (+ exogenous columns),
+    forecasting recursively step by step."""
+
+    def __init__(
+        self,
+        lags: int = 12,
+        learning_rate: float = 0.1,
+        max_iter: int = 100,
+        random_state: int | None = None,
+    ) -> None:
+        self.lags = lags
+        self.learning_rate = learning_rate
+        self.max_iter = max_iter
+        self.random_state = random_state
+
+    def _lag_matrix(self, history: list[float], n_lags: int) -> np.ndarray:
+        recent = history[-n_lags:]
+        return np.asarray(list(reversed(recent)), dtype=float)
+
+    def fit(self, x: Any, y: Any) -> LagBoostRegressor:
+        values = np.asarray(y, dtype=float)
+        exo = np.asarray(x)
+        n_lags = max(1, min(int(self.lags), max(1, len(values) // 3)))
+        self.n_lags_ = n_lags
+        if len(values) <= n_lags + 2:
+            raise TrainingError(
+                f"lag boosting needs more than {n_lags + 2} rows for {n_lags} lags — "
+                f"reduce 'lags' or load more history"
+            )
+        rows = [
+            np.concatenate(
+                [exo[index].astype(float), self._lag_matrix(list(values[:index]), n_lags)]
+            )
+            for index in range(n_lags, len(values))
+        ]
+        self.model_ = HistGradientBoostingRegressor(
+            learning_rate=float(self.learning_rate),
+            max_iter=int(self.max_iter),
+            random_state=self.random_state,
+        )
+        self.model_.fit(np.vstack(rows), values[n_lags:])
+        self.history_ = values
+        return self
+
+    def predict(self, x: Any) -> np.ndarray:
+        exo = np.asarray(x)
+        history = list(self.history_)
+        n_lags = int(self.n_lags_)
+        predicted: list[float] = []
+        for index in range(len(exo)):
+            features = np.concatenate([exo[index].astype(float), self._lag_matrix(history, n_lags)])
+            value = float(self.model_.predict(features.reshape(1, -1))[0])
+            predicted.append(value)
+            history.append(value)
+        return np.asarray(predicted, dtype=float)
+
+
+class AprioriModel(BaseEstimator):  # type: ignore[misc]
+    """Association rules mined with the pure-Python apriori implementation;
+    predict recommends items for each input basket."""
+
+    def __init__(
+        self,
+        min_support: float = 0.1,
+        min_confidence: float = 0.3,
+        min_lift: float = 1.0,
+        max_len: int = 3,
+    ) -> None:
+        self.min_support = min_support
+        self.min_confidence = min_confidence
+        self.min_lift = min_lift
+        self.max_len = max_len
+
+    def _baskets(self, x: Any) -> list[frozenset[str]]:
+        frame = pd.DataFrame(x)
+        return [
+            frozenset(str(value) for value in row if not pd.isna(value))
+            for row in frame.itertuples(index=False, name=None)
+        ]
+
+    def fit(self, x: Any, y: Any = None) -> AprioriModel:
+        baskets = [basket for basket in self._baskets(x) if basket]
+        self.rules_ = mine_rules(
+            baskets,
+            min_support=float(self.min_support),
+            min_confidence=float(self.min_confidence),
+            min_lift=float(self.min_lift),
+            max_len=int(self.max_len),
+        )
+        return self
+
+    def predict(self, x: Any) -> np.ndarray:
+        rows = self._baskets(x)
+        return np.asarray(
+            [
+                ", ".join(row["item"] for row in recommend_items(basket, self.rules_, top_n=5))
+                for basket in rows
+            ],
+            dtype=object,
+        )
+
+
+def _forecast_backtest(
+    estimator: Any,
+    x: np.ndarray,
+    y: np.ndarray,
+    *,
+    n_splits: int = 3,
+) -> dict[str, Any]:
+    """PRED-03: expanding-window one-block-ahead backtest + residual quantile bands."""
+    values = np.asarray(y, dtype=float)
+    rows_x = np.asarray(x)
+    residuals: list[float] = []
+    folds: list[dict[str, Any]] = []
+    for fold, (start, end) in enumerate(backtest_folds(len(values), n_splits=n_splits)):
+        model = clone(estimator)
+        model.fit(rows_x[:start], values[:start])
+        predicted = np.asarray(model.predict(rows_x[start:end]), dtype=float)
+        errors = values[start:end] - predicted
+        residuals.extend(float(error) for error in errors)
+        folds.append(
+            {
+                "fold": fold,
+                "train_rows": int(start),
+                "horizon": int(end - start),
+                "mae": round(float(np.mean(np.abs(errors))), 6),
+                "rmse": round(float(np.sqrt(np.mean(errors**2))), 6),
+            }
+        )
+    pool = np.asarray(residuals, dtype=float)
+    if pool.size == 0:
+        return {"backtest": folds, "backtest_mae": float("nan")}
+    return {
+        "backtest": folds,
+        "backtest_mae": round(float(np.mean(np.abs(pool))), 6),
+        "residual_q05": round(float(np.quantile(pool, 0.05)), 6),
+        "residual_q95": round(float(np.quantile(pool, 0.95)), 6),
+        "residual_std": round(float(np.std(pool)), 6),
+    }
 
 
 CLASSIFICATION_TASK_TYPES = frozenset({"binary", "multiclass", "multilabel"})
@@ -143,6 +324,14 @@ def _estimator_factory(spec: ModelSpec, task_type: str) -> Any:
         return IsolationForest
     if spec.id == "lof":
         return LocalOutlierFactor
+    if spec.id == "naive":
+        return NaiveForecaster
+    if spec.id == "seasonal_naive":
+        return SeasonalNaiveForecaster
+    if spec.id == "lag_boosting":
+        return LagBoostRegressor
+    if spec.id == "apriori":
+        return AprioriModel
     raise TrainingError(f"model '{spec.id}' has no training implementation yet")
 
 
@@ -155,6 +344,7 @@ def _accepts_random_state(spec: ModelSpec) -> bool:
         "mlp",
         "kmeans",
         "isolation_forest",
+        "lag_boosting",
     }
 
 
@@ -217,9 +407,13 @@ def fit_estimator(
     seed: int,
     on_epoch: Callable[[int, float, float], None] | None = None,
 ) -> dict[str, Any]:
-    """TRAIN-03: neural families train epoch-by-epoch in mini-batches with early stopping
-    on validation loss and the best-validation checkpoint restored. Returns the loss
-    curves; every other family fits in one call and returns an empty dict."""
+    """TRAIN-03/PRED-03: neural families train epoch-by-epoch with early stopping;
+    forecasting families run an expanding backtest + residual bands then fit;
+    every other family fits in one call and returns an empty dict."""
+    if spec.family == "forecast" and task_type == "forecasting":
+        payload = _forecast_backtest(estimator, x, y)
+        estimator.fit(x, y)
+        return payload
     if spec.family != "neural":
         estimator.fit(x, y)
         return {}
@@ -370,6 +564,10 @@ def _score(
             "mae": lambda: float(mean_absolute_error(y_true, y_pred)),
             "r2": lambda: float(r2_score(y_true, y_pred)),
         }
+    elif task_type == "forecasting":
+        # METRIC-04: MAE/RMSE/sMAPE/MASE; MASE scales by the holdout's naive errors.
+        scores = forecast_scores(y_true, y_pred)
+        return {name: scores[name] for name in plan.metrics if name in scores}
     else:
         return {}
     for name in plan.metrics:
@@ -395,12 +593,23 @@ def regression_scores(y_true: Any, y_pred: np.ndarray) -> dict[str, float]:
     return _score(plan, "regression", y_true, y_pred, None)
 
 
+def forecasting_scores(y_true: Any, y_pred: np.ndarray) -> dict[str, float]:
+    """Public per-test-set forecast scoreboard (METRIC-04) for the prediction tab."""
+    plan = metric_plan("forecasting")
+    return _score(plan, "forecasting", y_true, y_pred, None)
+
+
 def _make_splitter(task_type: str, frame: pd.DataFrame, task: Any, n_splits: int, seed: int) -> Any:
     rule = cv_strategy(task)
     if rule.strategy == "group_kfold":
         return GroupKFold(n_splits=n_splits).split(groups=frame[task.group].to_numpy())
     if rule.strategy == "time_series_split":
-        return TimeSeriesSplit(n_splits=n_splits).split(frame)
+        splitter = TimeSeriesSplit(n_splits=n_splits).split(frame)
+        if task.time_column is not None:
+            # Positional splits assume chronological rows — reindex by time order.
+            order = np.argsort(frame[task.time_column].to_numpy(), kind="stable")
+            return [(order[train], order[test]) for train, test in splitter]
+        return splitter
     if rule.strategy == "shuffle_split":
         return ShuffleSplit(n_splits=n_splits, train_size=0.7, random_state=seed).split(frame)
     if rule.strategy == "stratified_kfold":
@@ -507,7 +716,7 @@ def _anomaly_decision(estimator: Any, x: np.ndarray) -> np.ndarray:
 
 
 def unsupervised_scores(task_type: str, estimator: Any, x: np.ndarray) -> dict[str, float]:
-    """METRIC-05/06/07: holdout scores for an unsupervised model fit on a fold."""
+    """METRIC-05..08: holdout scores for an unsupervised model fit on a fold."""
     scores: dict[str, float] = {}
     if task_type == "clustering":
         labels = np.asarray(estimator.predict(x))
@@ -530,6 +739,9 @@ def unsupervised_scores(task_type: str, estimator: Any, x: np.ndarray) -> dict[s
     elif task_type == "anomaly_detection":
         decision = _anomaly_decision(estimator, x)
         scores["score_distribution"] = round(float(np.mean(decision)), 6)
+    elif task_type == "association":
+        # METRIC-08: leaderboard reports the mined rule statistics (finite per fold).
+        scores.update(association_rule_stats(getattr(estimator, "rules_", [])))
     return scores
 
 
@@ -764,8 +976,9 @@ def train_model(
         "data_hash": data_hash,
     }
     if train_info:
-        # TRAIN-03/ERR-08: per-epoch loss curves for neural runs.
-        metrics["neural"] = train_info
+        # TRAIN-03/ERR-08 loss curves; PRED-03 backtest + residual bands for forecasts.
+        key = "forecast" if task_type == "forecasting" else "neural"
+        metrics[key] = train_info
     meta_path = workspace.write_run_json(run_id, "meta.json", meta)
     metrics_path = workspace.write_run_json(run_id, "metrics.json", metrics)
     state.models = [model for model in state.models if model.run_id != run_id]

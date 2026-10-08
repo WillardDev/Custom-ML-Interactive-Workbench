@@ -93,6 +93,8 @@ Legend: **R** = editable/required, **view** = readable, **—** = not yet availa
   - Mode selection: Auto-compare, Manual, Auto with tuning.
   - Hyperparameter form generated from registry schema (`MODEL-02`); conditional prompts per `MODEL-03`; incompatible options not expressible (`MODEL-04`).
   - Neural builder with presets/advanced fields shown only for `family: neural` (Phase 7).
+  - Forecasting/association models (`naive`, `seasonal_naive`, `lag_boosting`, `apriori`) shown
+    for their tasks (Phase 8, `enabled_phase: 8`).
   - Small-data boosting-baseline hint visible (`HINT-01`); small-data neural warning (`WARN-06`).
 - **Rules:** MODEL-01…MODEL-04, HINT-01, WARN-06, WARN-07.
 - **Edit effect:** invalidates tabs 6–10.
@@ -121,6 +123,10 @@ Legend: **R** = editable/required, **view** = readable, **—** = not yet availa
 - **Acceptance criteria:**
   - Locked until ≥1 trained model (`GATE-02`).
   - Task capabilities per `PRED-01`…`PRED-07`, including clustering surrogate fallback (`PRED-04`), t-SNE blocked (`PRED-05`, `WARN-01`), LOF novelty mode (`PRED-06`).
+  - Forecasting (`PRED-03`): holdout scores (`METRIC-04`), horizon slider 1–48, point forecast with
+    90% residual-quantile bands, expanding-window backtest fold table.
+  - Association (`PRED-07`): `predict_frame` recommends consequent items per basket ranked by
+    lift × confidence (Phase 8).
 - **Rules:** GATE-02, PRED-01…PRED-07, WARN-01, WARN-02, WARN-07.
 - **Edit effect:** read-only w.r.t. training; threshold choice feeds Outcome (`OUT-01`).
 

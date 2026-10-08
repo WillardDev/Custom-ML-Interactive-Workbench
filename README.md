@@ -28,7 +28,8 @@ Design source: *ML Workbench: Software Documentation v1.0 — Architecture and t
 | Phase 5 — Error Analysis, Explainability, Outcome | **complete — exit criteria met** |
 | Phase 6 — Unsupervised (Clustering, Dim-Reduction, Anomaly) | **complete — exit criteria met** |
 | Phase 7 — Neural networks + anomaly scoring | **complete — exit criteria met** |
-| Phases 8–9 — Time Series / Association, Production | not started |
+| Phase 8 — Time series + association rules | **complete — exit criteria met** |
+| Phase 9 — Production hardening | not started |
 
 Current state: `docs/` and `registry/` hold the Phase 0 spec (124 rules, tab matrix, contracts);
 `src/` holds the foundation (project state, rules engine for gating/staleness, registry loader,
@@ -45,18 +46,23 @@ detection with holdout scoring (METRIC-05..07), unsupervised EDA (EDA-05/06/07),
 (ERR-04/05/06), explanations (EXPL-06/07/08) and outcome packaging (OUT-02/03/04), and the Phase 7
 neural/anomaly stack — MLP classifier + regressor with a per-epoch early-stopping training loop
 (TRAIN-03), anomaly scoring with threshold flagging and LOF novelty mode (PRED-06), neural error
-views (ERR-08) and Integrated-Gradients explanations (EXPL-04) — all checks green (ruff, mypy
-strict, rule-test sync, pytest).
+views (ERR-08) and Integrated-Gradients explanations (EXPL-04) — and the Phase 8
+forecasting/association stack — naive and seasonal-naive baselines, lag-feature boosting,
+pure-Python apriori rule mining, forecast metrics with residual-quantile bands and expanding
+backtest (METRIC-04/08, PRED-03/07), time-series and association EDA (EDA-04/08), rule-network and
+lift-vs-confidence explanations (EXPL-09) and rules-table outcome packaging (OUT-05) — all checks
+green (ruff, mypy strict, rule-test sync, pytest).
 
-## MVP scope (delivered in Phases 2–6)
+## MVP scope (delivered in Phases 2–8)
 
-- Tasks: binary and multiclass classification, regression, clustering, dimensionality reduction and
-  anomaly detection on tabular data
+- Tasks: binary and multiclass classification, regression, forecasting, clustering, dimensionality
+  reduction, anomaly detection and association rules on tabular data
 - Models: linear baselines and gradient boosting (scikit-learn, XGBoost, LightGBM), KMeans, PCA,
-  Isolation Forest, MLP (classification/regression), Local Outlier Factor
+  Isolation Forest, MLP (classification/regression), Local Outlier Factor, naive and
+  seasonal-naive forecasters, lag-feature boosting, pure-Python apriori
 - All 10 workflow tabs present end-to-end: state, gating, staleness, step log, SHAP, report and script export
-- Deferred: time series / autoencoders / association rules / auto-compare (Phase 8), production
-  hardening (Phase 9)
+- Deferred: autoencoders, auto-compare, transformer time-series models (deeper backends),
+  production hardening (Phase 9)
 
 ## Phases
 
@@ -264,6 +270,39 @@ flag at an adjustable threshold; rule coverage green.
 → *met: `test_phase7_neural_anomaly.py` drives train → evaluate → predict → error → explain for
 neural runs and anomaly/LOF scoring; `scaffold_rule_tests --check` stays in sync.*
 
+#### Phase 8 — Time series + association rules ✅
+
+- [x] Forecast baselines (`enabled_phase: 8`): naive (last-value), seasonal-naive (period-aware)
+      and lag-feature boosting (HistGradientBoosting on lag windows) — all `library: ml_workbench`,
+      no new dependencies (`src/ml_workbench/services/training_service.py`, `registry/models.yaml`)
+- [x] Forecast metrics (`METRIC-04`): MAE, RMSE, sMAPE and MASE (scaled by the holdout's own naive
+      diffs) with the expanding-window one-block-ahead backtest and residual-quantile bands
+      (`PRED-03`) recorded in `metrics.json["forecast"]`
+- [x] Forecast horizon (PRED-03): Prediction tab slider (1–48) → `forecast_frame` point forecast
+      with 90% residual-quantile bands (`lower = point + q05`, `upper = point + q95`) plus the
+      backtest fold table
+- [x] Association mining (`METRIC-08`): pure-Python apriori — item frequencies, frequent itemsets
+      (max length 3) and rules filtered by support/confidence/lift
+      (`src/ml_workbench/rules/association.py`)
+- [x] Basket recommendations (PRED-07): `recommend_items` ranks consequents by lift × confidence
+      for a given basket, excluding items already held; exposed via `predict_frame`
+- [x] Association EDA (`EDA-08`) and time-series EDA (`EDA-04`): item frequency + basket-size
+      distributions; moving-average decomposition, ACF/PACF (Durbin–Levinson), rolling statistics
+      and an ADF-lite stationarity check (`src/ml_workbench/services/eda_service.py`)
+- [x] Association explanations (`EXPL-09`): rule network, lift-vs-confidence scatter and the mined
+      rule table; forecasting explains via the target history trace
+- [x] Association outcome (`OUT-05`): `outcome/rules.csv` (antecedent/consequent joined with ` + `)
+      alongside the refit pipeline and model card
+- [x] Rule tests implemented (METRIC-04/08, PRED-03/07, EDA-04/08, EXPL-09, OUT-05) + service tests
+      (`tests/test_phase8_forecasting_association.py`): forecasting and association flows with the
+      `data/samples/forecasting.csv` and `data/samples/association.csv` samples
+
+**Exit criteria:** a forecasting model trains, evaluates, forecasts with bands and explains
+end-to-end; apriori mines rules, recommends baskets, explains and packages the rules table; rule
+coverage green.
+→ *met: `test_phase8_forecasting_association.py` drives train → evaluate → forecast / recommend →
+explain → outcome for both families; `scaffold_rule_tests --check` stays in sync (124 tests).*
+
 ### Implementation
 
 | # | Phase | Status | Content | Exit criteria |
@@ -273,8 +312,8 @@ neural runs and anomaly/LOF scoring; `scaffold_rule_tests --check` stays in sync
 | 4 | Modelling, Training, Prediction | ✅ | Registry filtering, hyperparameter forms, CV/tuning, leaderboard, artifacts + metadata sidecars, prediction tab | Train → leaderboard → predict on tabular cls/reg; LRU lazy-load works |
 | 5 | Error Analysis, Explainability, Outcome | ✅ | Task-specific error views, SHAP as background jobs, report + script export + model card | **MVP complete:** full 10-tab flow on sample data with reproducible script |
 | 6 | Unsupervised | ✅ | KMeans clustering, PCA dimensionality reduction, Isolation-Forest anomaly detection: splits, EDA, holdout scoring, error views, explanations, outcomes | Clustering/dim-reduction/anomaly runs with explanations + packaged outcomes on sample data |
-| 7 | Neural networks | — | MLP/transformers, GPU routing, live loss curves, gradient-based explanations | Design doc Phase 3 delivered |
-| 8 | Advanced | — | Time series, autoencoders, association rules, auto-compare | Design doc Phase 4 delivered |
+| 7 | Neural networks | ✅ | MLP classifier + regressor, early-stopping loop, anomaly scoring/LOF novelty, Integrated Gradients | Neural runs train → evaluate → error → explain end-to-end |
+| 8 | Time series + association | ✅ | Naive/seasonal-naive/lag boosting forecasters, pure-Python apriori, forecast metrics + bands + backtest, basket recommendations, ts/association EDA + explanations + outcomes | Forecasting and association flows complete end-to-end; rule coverage green |
 | 9 | Production (optional) | — | Background job queue (Redis/Celery), multi-user projects, ONNX serving, monitoring | Design doc Phase 5 delivered |
 
 ## Repository layout

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import pandas as pd
-import pytest
 
 from ml_workbench.rules.eda import (
     EDA_MAX_ROWS,
@@ -54,9 +53,11 @@ def test_eda_regression_views_skew_hint() -> None:
     assert skew_hint(balanced) is None
 
 
-@pytest.mark.skip(reason="pending implementation: docs/rules.md EDA-04")
 def test_eda_timeseries_views() -> None:
-    raise NotImplementedError("docs/rules.md EDA-04")
+    views = task_views(_task("forecasting"))
+    assert views == ("decomposition", "acf_pacf", "rolling_stats", "stationarity")
+    assert "decomposition" in eda_plan(_task("forecasting"))
+    assert "stationarity" in eda_plan(_task("forecasting"))
 
 
 def test_eda_clustering_views() -> None:
@@ -77,9 +78,10 @@ def test_eda_dimred_views() -> None:
     assert "vif" in eda_plan(_task("dimensionality_reduction", learning_type="unsupervised"))
 
 
-@pytest.mark.skip(reason="pending implementation: docs/rules.md EDA-08")
 def test_eda_association_views() -> None:
-    raise NotImplementedError("docs/rules.md EDA-08")
+    views = task_views(_task("association", learning_type="unsupervised"))
+    assert views == ("item_frequency", "basket_size")
+    assert "item_frequency" in eda_plan(_task("association", learning_type="unsupervised"))
 
 
 def test_eda_samples_large_data() -> None:

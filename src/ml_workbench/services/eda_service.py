@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -9,6 +10,7 @@ from scipy import stats
 from sklearn.decomposition import PCA
 from sklearn.metrics import pairwise_distances
 
+from ml_workbench.rules.association import basket_size_distribution, item_frequency
 from ml_workbench.rules.eda import (
     EDA_MAX_ROWS,
     eda_plan,
@@ -19,6 +21,8 @@ from ml_workbench.rules.eda import (
     task_views,
 )
 from ml_workbench.state import TaskDefinition, feature_columns
+
+ADF_CRITICAL_5PCT: float = -2.86  # large-sample 5% critical value, constant only (EDA-04)
 
 
 @dataclass(frozen=True)
@@ -80,6 +84,28 @@ class DimReductionReport:
 
 
 @dataclass(frozen=True)
+class TimeseriesReport:
+    period: int
+    trend: pd.Series
+    seasonal: pd.Series
+    residual: pd.Series
+    acf: pd.DataFrame
+    pacf: pd.DataFrame
+    rolling: pd.DataFrame
+    stationarity_stat: float
+    stationarity_critical: float
+    stationary: bool
+
+
+@dataclass(frozen=True)
+class AssociationReport:
+    item_frequency: pd.DataFrame
+    basket_size: pd.Series
+    baskets: int
+    unique_items: int
+
+
+@dataclass(frozen=True)
 class EdaResult:
     plan: tuple[str, ...]
     base: BaseReport
@@ -89,6 +115,8 @@ class EdaResult:
     clustering: ClusteringReport | None = None
     anomaly: AnomalyReport | None = None
     dimred: DimReductionReport | None = None
+    timeseries: TimeseriesReport | None = None
+    association: AssociationReport | None = None
 
 
 def _categorical(target: pd.DataFrame) -> tuple[list[str], list[str]]:
@@ -432,6 +460,98 @@ def dimred_report(frame: pd.DataFrame, task: TaskDefinition) -> DimReductionRepo
     return DimReductionReport(correlation_groups=groups, vif=vif, n_features=len(columns))
 
 
+def _pacf_from_acf(acf: list[float], max_lag: int) -> list[float]:
+    """Durbin–Levinson recursion: partial autocorrelations from the ACF."""
+    pacf = [1.0]
+    phi: list[float] = []
+    for lag in range(1, max_lag + 1):
+        numerator = acf[lag] - sum(phi[j - 1] * acf[lag - j] for j in range(1, lag))
+        denominator = 1.0 - sum(phi[j - 1] * acf[j] for j in range(1, lag))
+        phi_kk = numerator / denominator if abs(denominator) > 1e-12 else 0.0
+        updated = [phi[j - 1] - phi_kk * phi[lag - 1 - j] for j in range(1, lag)]
+        phi = [*updated, phi_kk]
+        pacf.append(phi_kk)
+    return pacf
+
+
+def _adf_statistic(values: np.ndarray) -> float:
+    """EDA-04: augmented Dickey–Fuller t-statistic on the lagged level (no trend)."""
+    if len(values) < 8:
+        return float("nan")
+    delta = np.diff(values)
+    lagged = values[:-1]
+    design = np.column_stack([np.ones(len(lagged)), lagged])
+    coefficients, *_ = np.linalg.lstsq(design, delta, rcond=None)
+    residuals = delta - design @ coefficients
+    sse = float(residuals @ residuals)
+    dof = max(1, len(lagged) - design.shape[1])
+    covariance = (sse / dof) * np.linalg.pinv(design.T @ design)
+    std_err = math.sqrt(max(float(covariance[1, 1]), 1e-18))
+    return float(coefficients[1] / std_err)
+
+
+def timeseries_report(frame: pd.DataFrame, task: TaskDefinition) -> TimeseriesReport:
+    """EDA-04: decomposition, ACF/PACF, rolling statistics and a stationarity test."""
+    if task.target is None:
+        raise EdaException("forecasting EDA needs a target column")
+    series = pd.to_numeric(frame[task.target], errors="coerce").dropna().astype(float)
+    values = series.to_numpy()
+    if len(values) < 4:
+        raise EdaException("forecasting EDA needs at least 4 rows")
+    period = 12 if len(values) >= 24 else max(2, len(values) // 4)
+    window = min(period if len(values) >= 2 * period else max(3, len(values) // 4), len(values))
+    window = max(3, window)
+    if window % 2 == 0:
+        window += 1
+    trend = series.rolling(window, center=True, min_periods=1).mean()
+    detrended = series - trend
+    phases = pd.Series(np.arange(len(values)) % period, index=series.index)
+    seasonal_by_phase = detrended.groupby(phases).mean()
+    seasonal = phases.map(seasonal_by_phase).astype(float).fillna(0.0)
+    residual = series - trend - seasonal
+    max_lag = min(40, max(1, len(values) // 2 - 1))
+    mean = float(np.mean(values))
+    centered = values - mean
+    denominator = float(centered @ centered)
+    acf_values = [
+        1.0
+        if lag == 0
+        else (float(centered[lag:] @ centered[:-lag]) / denominator if denominator > 1e-12 else 0.0)
+        for lag in range(max_lag + 1)
+    ]
+    pacf_values = _pacf_from_acf(acf_values, max_lag)
+    acf_table = pd.DataFrame({"lag": range(1, max_lag + 1), "acf": acf_values[1:]}).round(4)
+    pacf_table = pd.DataFrame({"lag": range(1, max_lag + 1), "pacf": pacf_values[1:]}).round(4)
+    rolling = pd.DataFrame(
+        {"rolling_mean": trend, "rolling_std": series.rolling(window, min_periods=2).std()}
+    ).round(4)
+    stat = _adf_statistic(values)
+    return TimeseriesReport(
+        period=period,
+        trend=trend.round(4),
+        seasonal=seasonal.round(4),
+        residual=residual.round(4),
+        acf=acf_table,
+        pacf=pacf_table,
+        rolling=rolling,
+        stationarity_stat=round(stat, 4),
+        stationarity_critical=ADF_CRITICAL_5PCT,
+        stationary=bool(math.isfinite(stat) and stat < ADF_CRITICAL_5PCT),
+    )
+
+
+def association_report(frame: pd.DataFrame, task: TaskDefinition) -> AssociationReport:
+    """EDA-08: item frequency and basket size distribution."""
+    frequency = item_frequency(frame)
+    sizes = basket_size_distribution(frame)
+    return AssociationReport(
+        item_frequency=frequency,
+        basket_size=sizes,
+        baskets=int(sizes.sum()) if not sizes.empty else 0,
+        unique_items=int(len(frequency)),
+    )
+
+
 def eda_report(frame: pd.DataFrame, task: TaskDefinition, *, seed: int = 0) -> EdaResult:
     plan = eda_plan(task)
     base = base_report(frame, seed=seed)
@@ -441,12 +561,17 @@ def eda_report(frame: pd.DataFrame, task: TaskDefinition, *, seed: int = 0) -> E
     clustering = None
     anomaly = None
     dimred = None
+    timeseries = None
+    association = None
     if task.task_type in {"binary", "multiclass", "multilabel"}:
         classification = classification_report(frame, task)
         views = ["class_balance", "feature_by_class", "chi_square"]
     elif task.task_type == "regression":
         regression = regression_report(frame, task)
         views = ["target_histogram", "qq_plot", "feature_target_scatter"]
+    elif task.task_type == "forecasting":
+        timeseries = timeseries_report(frame, task)
+        views = ["decomposition", "acf_pacf", "rolling_stats", "stationarity"]
     elif task.learning_type == "unsupervised":
         views = list(task_views(task))
         if task.task_type == "clustering":
@@ -455,6 +580,8 @@ def eda_report(frame: pd.DataFrame, task: TaskDefinition, *, seed: int = 0) -> E
             anomaly = anomaly_report(frame, task)
         elif task.task_type == "dimensionality_reduction":
             dimred = dimred_report(frame, task)
+        elif task.task_type == "association":
+            association = association_report(frame, task)
     return EdaResult(
         plan=plan,
         base=base,
@@ -464,4 +591,6 @@ def eda_report(frame: pd.DataFrame, task: TaskDefinition, *, seed: int = 0) -> E
         clustering=clustering,
         anomaly=anomaly,
         dimred=dimred,
+        timeseries=timeseries,
+        association=association,
     )

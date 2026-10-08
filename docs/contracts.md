@@ -323,6 +323,37 @@ Neural runs and anomaly scoring extend the existing artifact set:
   (per-feature mean|attribution| signed mean, Integrated Gradients from a zero baseline, 32 steps)
   and `gradient_local` (first-row attributions), alongside the usual PDP/ICE (EXPL-05).
 
+## Phase 8 delivery artifacts (`METRIC-04`, `METRIC-08`, `PRED-03`, `PRED-07`, `EDA-04`, `EDA-08`, `EXPL-09`, `OUT-05`)
+
+Forecasting and association runs extend the existing artifact set:
+
+- **Forecast training payload** (`models/<run_id>/metrics.json["forecast"]`, METRIC-04): holdout
+  scores `mae` / `rmse` / `smape` / `mase`, plus the PRED-03 expanding-window backtest
+  (`backtest: [{fold, mae, ...}]`) and residual-quantile bands (`residual_q05`, `residual_q95`,
+  `residual_std`). Forecasts use `naive` (last-value), `seasonal_naive` (period-aware) and
+  `lag_boosting` (HistGradientBoosting on lag windows) — all `library: ml_workbench`.
+- **Forecast frame contract** (PRED-03, `prediction_service.forecast_frame`): horizon `h` (1–48,
+  clamped by `forecast_horizon_plan`) yields columns `step` (1..h), `forecast`, `lower`,
+  `upper` where `lower = point + q05` and `upper = point + q95` (constant width from the backtest
+  residual quantiles; `lower` may exceed `point` when residuals are biased). Forecasting explains
+  via the target history trace (`explain_method: forecast`).
+- **Association mining** (METRIC-08, `rules/association.py`): pure-Python apriori — no new
+  dependencies. One basket per row, non-null stringified cell values are items; frequent itemsets
+  up to `max_len` (default 3); rules filtered by `min_support` / `min_confidence` / `min_lift`.
+  Metrics `support` / `confidence` / `lift` are scored on the full frame (no holdout — the model
+  is unsupervised), recorded in `metrics.json["folds"]` with the mean as the primary score.
+- **Basket recommendation contract** (PRED-07, `recommend_items`): for a given basket, rank
+  consequents by `lift × confidence`, exclude items already held, return top-N (default 5);
+  exposed through `predict_frame` (`prediction` column).
+- **Association EDA + explanations** (EDA-08, EXPL-09): item-frequency and basket-size
+  distributions (EDA-08); rule network, lift-vs-confidence scatter and the mined rule table
+  (EXPL-09). Time-series EDA (EDA-04) adds moving-average decomposition, ACF/PACF
+  (Durbin–Levinson), rolling statistics and an ADF-lite stationarity check (critical value
+  `-2.86`).
+- **Association outcome** (OUT-05, `outcome_service`): `outcome/rules.csv` with
+  `antecedent` / `consequent` (tuple items joined with `" + "`), `support`, `confidence`, `lift`,
+  alongside the refit pipeline (`pipeline.joblib`) and `model_card.json`.
+
 ## Dataset versions and data hash (§6.1, §9)
 
 - Every dataset write creates a new immutable file

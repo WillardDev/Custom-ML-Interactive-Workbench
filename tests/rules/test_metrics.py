@@ -3,8 +3,10 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from ml_workbench.rules.association import association_rule_stats, filter_rules
 from ml_workbench.rules.metrics import (
     anomaly_labeled_scores,
+    forecast_scores,
     labeled_cluster_scores,
     metric_plan,
     trustworthiness_coef,
@@ -35,9 +37,23 @@ def test_metrics_regression_skew_prefers_mae() -> None:
     assert "rmse" in skewed.metrics and "r2" in skewed.metrics
 
 
-@pytest.mark.skip(reason="time series metrics arrive in Phase 8 (docs/rules.md METRIC-04)")
 def test_metrics_time_series() -> None:
-    raise NotImplementedError("docs/rules.md METRIC-04")
+    plan = metric_plan("forecasting")
+    assert plan.primary == "mae"
+    assert set(plan.metrics) == {"mae", "rmse", "smape", "mase"}
+    assert plan.rule_id == "METRIC-04"
+
+    y_true = np.array([1.0, 2.0, 3.0, 4.0])
+    y_pred = np.array([1.0, 2.0, 4.0, 3.0])
+    scores = forecast_scores(y_true, y_pred)
+    assert scores["mae"] == pytest.approx(0.5)
+    assert scores["rmse"] == pytest.approx(np.sqrt(0.5))
+    assert scores["smape"] > 0.0
+    # MASE scales by the mean |y_t - y_{t-1}| of the holdout (= 1.0 here).
+    assert scores["mase"] == pytest.approx(0.5)
+
+    zeros = forecast_scores(np.zeros(4), np.zeros(4))
+    assert np.isnan(zeros["mape"]) and np.isnan(zeros["mase"])
 
 
 def test_metrics_clustering() -> None:
@@ -95,6 +111,34 @@ def test_metrics_anomaly_labeled_vs_not() -> None:
     assert np.isnan(single_class["roc_auc"])
 
 
-@pytest.mark.skip(reason="association-rule metrics arrive in Phase 8 (docs/rules.md METRIC-08)")
 def test_metrics_association_filters() -> None:
-    raise NotImplementedError("docs/rules.md METRIC-08")
+    plan = metric_plan("association")
+    assert plan.primary == "lift"
+    assert set(plan.metrics) == {"support", "confidence", "lift"}
+    assert plan.rule_id == "METRIC-08"
+
+    rules = [
+        {
+            "antecedent": ("a",),
+            "consequent": ("b",),
+            "support": 0.4,
+            "confidence": 0.8,
+            "lift": 1.6,
+        },
+        {
+            "antecedent": ("b",),
+            "consequent": ("c",),
+            "support": 0.1,
+            "confidence": 0.2,
+            "lift": 0.8,
+        },
+    ]
+    strong = filter_rules(rules, min_support=0.2, min_confidence=0.5, min_lift=1.0)
+    assert len(strong) == 1 and strong[0]["antecedent"] == ("a",)
+    assert filter_rules(rules, min_lift=2.0) == []
+
+    stats = association_rule_stats(rules)
+    assert stats["support"] == pytest.approx(0.25)
+    assert stats["confidence"] == pytest.approx(0.5)
+    assert stats["lift"] == pytest.approx(1.2)
+    assert association_rule_stats([]) == {"support": 0.0, "confidence": 0.0, "lift": 0.0}
