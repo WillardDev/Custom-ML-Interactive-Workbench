@@ -555,9 +555,13 @@ def _score(
             "mcc": lambda: float(matthews_corrcoef(y_true, y_pred)),
             "balanced_accuracy": lambda: float(balanced_accuracy_score(y_true, y_pred)),
         }
-        if binary and proba is not None:
-            score_map["pr_auc"] = lambda: float(average_precision_score(y_true, proba[:, 1]))
-            score_map["roc_auc"] = lambda: float(average_precision_score(y_true, proba[:, 1]))
+        if proba is not None:
+            if binary:
+                score_map["pr_auc"] = lambda: float(average_precision_score(y_true, proba[:, 1]))
+            else:
+                score_map["pr_auc"] = lambda: float(
+                    average_precision_score(y_true, proba, average="macro")
+                )
     elif task_type == "regression":
         score_map = {
             "rmse": lambda: float(math.sqrt(float(mean_squared_error(y_true, y_pred)))),

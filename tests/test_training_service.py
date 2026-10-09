@@ -98,6 +98,28 @@ def test_tuning_returns_best_params_and_prunes(
     assert result.best_score > 0
 
 
+def test_imbalanced_multiclass_uses_macro_pr_auc_primary(prepared_workspace) -> None:
+    rng = np.random.default_rng(5)
+    labels = np.array(["a"] * 70 + ["b"] * 15 + ["c"] * 15)
+    rng.shuffle(labels)
+    frame = pd.DataFrame(
+        {
+            "x": rng.normal(size=100),
+            "y": rng.normal(size=100),
+            "target": labels,
+        }
+    )
+    state, ws = prepared_workspace(frame, target="target", task_type="multiclass")
+    result = train_model(
+        state, ws, "logistic_regression", {"C": 1.0, "penalty": "l2", "solver": "lbfgs"}
+    )
+    assert result.primary == "pr_auc"
+
+    metrics = json.loads((ws.run_dir(result.run_id) / "metrics.json").read_text())
+    assert metrics["rule_id"] == "METRIC-02"
+    assert all("pr_auc" in fold for fold in metrics["folds"])
+
+
 def test_regression_saves_target_transform_and_predicts_in_domain(
     prepared_workspace,
 ) -> None:
