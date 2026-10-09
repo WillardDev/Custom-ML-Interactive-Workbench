@@ -22,7 +22,11 @@ from sklearn.metrics import (
 from ml_workbench.rules.error_analysis import error_view_plan, neural_diagnostics
 from ml_workbench.rules.prediction import calibration_curve, threshold_metrics
 from ml_workbench.services.model_cache import ModelCache
-from ml_workbench.services.prediction_service import get_pipeline
+from ml_workbench.services.prediction_service import (
+    binary_indicator,
+    get_pipeline,
+    positive_class,
+)
 from ml_workbench.services.training_service import _anomaly_decision
 from ml_workbench.services.workspace import Workspace, WorkspaceError
 from ml_workbench.state import ProjectState, feature_columns
@@ -34,6 +38,16 @@ class ErrorAnalysisError(ValueError):
 
 WORST_N: int = 10
 SEGMENT_MAX_CATEGORIES: int = 8
+
+
+def _abs_error(y_true: Any, y_pred: Any) -> np.ndarray:
+    """Per-row error: absolute residual for numeric targets, misclassification otherwise."""
+    true = np.asarray(y_true)
+    pred = np.asarray(y_pred)
+    if np.issubdtype(true.dtype, np.number) and np.issubdtype(pred.dtype, np.number):
+        residual = np.subtract(np.asarray(pred, dtype=float), np.asarray(true, dtype=float))
+        return np.asarray(residual, dtype=float)
+    return np.asarray(pred != true, dtype=float)
 
 
 @dataclass(frozen=True)
@@ -73,6 +87,7 @@ def error_views(
     y_true = np.asarray(state.frame[state.task.target].iloc[test_idx])
     y_pred = np.asarray(pipeline.predict(test_frame[features]))
     proba = _positive_proba(pipeline, test_frame[features], state.task.task_type, y_pred)
+    positive = positive_class(pipeline)
 
     predictions = test_frame[[*features, state.task.target]].copy()
     predictions["true"] = y_true
@@ -82,7 +97,7 @@ def error_views(
         {"view": name, **payload}
         for name, payload in zip(
             _view_names(state.task.task_type),
-            _build_views(state.task.task_type, y_true, y_pred, proba),
+            _build_views(state.task.task_type, y_true, y_pred, proba, positive),
             strict=False,
         )
     ]
@@ -157,9 +172,10 @@ def _build_views(
     y_true: np.ndarray,
     y_pred: np.ndarray,
     proba: np.ndarray | None,
+    positive: Any = None,
 ) -> tuple[dict[str, Any], ...]:
     if task_type == "binary":
-        return _binary_views(y_true, y_pred, proba)
+        return _binary_views(y_true, y_pred, proba, positive)
     if task_type in {"multiclass", "multilabel"}:
         return _multiclass_views(y_true, y_pred)
     if task_type in {"regression", "forecasting"}:
@@ -168,9 +184,15 @@ def _build_views(
 
 
 def _binary_views(
-    y_true: np.ndarray, y_pred: np.ndarray, proba: np.ndarray | None
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    proba: np.ndarray | None,
+    positive: Any = None,
 ) -> tuple[dict[str, Any], ...]:
     classes = np.unique(np.concatenate([y_true, y_pred])).tolist()
+    if positive is None:
+        positive = classes[-1] if classes else None
+    y01 = binary_indicator(y_true, positive)
     score = float(np.mean(y_true == y_pred))
     matrix = pd.DataFrame(
         confusion_matrix(y_true, y_pred, labels=classes),
@@ -184,23 +206,20 @@ def _binary_views(
         recall = [1.0, float(score)]
         average_precision = score
     else:
-        fpr, tpr, _ = roc_curve(y_true, proba)
-        precision, recall, _ = precision_recall_curve(y_true, proba)
-        average_precision = average_precision_score(y_true, proba)
-        centers, observed = calibration_curve(proba, y_true)
+        fpr, tpr, _ = roc_curve(y01, proba)
+        precision, recall, _ = precision_recall_curve(y01, proba)
+        average_precision = average_precision_score(y01, proba)
+        centers, observed = calibration_curve(proba, y01)
     rows = []
+    scores_or_pred = proba if proba is not None else binary_indicator(y_pred, positive)
     for threshold in np.linspace(0.0, 1.0, 9):
-        rows.append(
-            threshold_metrics(
-                y_true, proba if proba is not None else y_pred, threshold=float(threshold)
-            )
-        )
+        rows.append(threshold_metrics(y01, scores_or_pred, threshold=float(threshold)))
     return (
         {"confusion": matrix.round(4)},
         {
             "fpr": [float(v) for v in fpr],
             "tpr": [float(v) for v in tpr],
-            "auc": score if proba is None else roc_auc_score(y_true, proba),
+            "auc": score if proba is None else roc_auc_score(y01, proba),
         },
         {
             "precision": [float(v) for v in precision],
@@ -282,7 +301,7 @@ def _regression_views(y_true: np.ndarray, y_pred: np.ndarray) -> tuple[dict[str,
 
 def _worst_n_rows(predictions: pd.DataFrame, target: str) -> pd.DataFrame:
     rows = predictions.drop(columns=[target]).copy()
-    rows["error"] = np.abs(rows["prediction"].astype(float) - rows["true"].astype(float))
+    rows["error"] = _abs_error(rows["true"].to_numpy(), rows["prediction"].to_numpy())
     rows = rows.sort_values("error", ascending=False).head(WORST_N).reset_index(drop=True)
     return rows
 
@@ -299,7 +318,7 @@ def _segment_slices(
     for column in categorical:
         cardinality = predictions[column].nunique(dropna=True)
         if cardinality <= SEGMENT_MAX_CATEGORIES:
-            errors = np.abs(np.asarray(y_pred, dtype=float) - np.asarray(y_true, dtype=float))
+            errors = _abs_error(y_true, y_pred)
             segment = pd.DataFrame(
                 {"column": column, "value": predictions[column], "error": errors}
             )

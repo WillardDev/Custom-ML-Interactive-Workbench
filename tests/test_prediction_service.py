@@ -49,6 +49,22 @@ def test_evaluate_test_threshold_and_calibration(
     assert float(observed.min()) >= 0.0 and float(observed.max()) <= 1.0
 
 
+def test_evaluate_test_string_binary_labels(
+    prepared_workspace, string_binary_frame: pd.DataFrame
+) -> None:
+    state, ws = prepared_workspace(string_binary_frame, target="target", task_type="binary")
+    run_id = _train(state, ws, "logistic_regression", LOGISTIC_PARAMS)
+    evaluation = evaluate_test(state, ws, run_id)
+    assert evaluation.positive_label == "Yes"
+
+    at_50 = threshold_eval(evaluation, threshold=0.5)
+    assert 0.0 <= at_50["accuracy"] <= 1.0
+
+    expected, observed = calibration(evaluation, bins=4)
+    assert len(expected) == len(observed)
+    assert float(observed.min()) >= 0.0 and float(observed.max()) <= 1.0
+
+
 def test_get_pipeline_uses_lru_cache_and_evicts(
     prepared_workspace, binary_frame: pd.DataFrame
 ) -> None:

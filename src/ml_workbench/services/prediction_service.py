@@ -52,6 +52,7 @@ class TestEvaluation:
     y_pred: np.ndarray | None
     y_proba: np.ndarray | None
     scores: dict[str, float]
+    positive_label: Any = None
 
 
 def load_pipeline(workspace: Workspace, run_id: str) -> Any:
@@ -76,6 +77,24 @@ def _load_target_transform(workspace: Workspace, run_id: str) -> Any:
     if not path.is_file():
         return None
     return joblib.load(path)
+
+
+def positive_class(pipeline: Any) -> Any:
+    """Binary positive class per sklearn convention: the second of the model's classes_."""
+    classes = list(getattr(pipeline.named_steps["model"], "classes_", []))
+    return classes[1] if len(classes) > 1 else None
+
+
+def binary_indicator(y_true: Any, positive: Any) -> np.ndarray:
+    """Map arbitrary binary labels (e.g. 'No'/'Yes') to {0,1} against the positive class."""
+    mask = np.asarray(y_true) == positive
+    return np.asarray(mask, dtype=int)
+
+
+def _binary_target(evaluation: TestEvaluation) -> Any:
+    if evaluation.positive_label is None or evaluation.y_true is None:
+        return evaluation.y_true
+    return binary_indicator(evaluation.y_true, evaluation.positive_label)
 
 
 def _run_spec(state: ProjectState, run_id: str) -> tuple[ModelRun, Any]:
@@ -262,7 +281,14 @@ def evaluate_test(
         scores = forecasting_scores(y_true, y_pred)
     else:
         scores = regression_scores(y_true, y_pred)
-    return TestEvaluation(y_true=y_true, y_pred=y_pred, y_proba=proba, scores=scores)
+    positive_label = positive_class(pipeline) if state.task.task_type == "binary" else None
+    return TestEvaluation(
+        y_true=y_true,
+        y_pred=y_pred,
+        y_proba=proba,
+        scores=scores,
+        positive_label=positive_label,
+    )
 
 
 def forecast_frame(
@@ -305,7 +331,7 @@ def threshold_eval(evaluation: TestEvaluation, threshold: float = 0.5) -> dict[s
     positive = (
         evaluation.y_proba[:, 1] if evaluation.y_proba.shape[1] > 1 else evaluation.y_proba[:, 0]
     )
-    return threshold_metrics(evaluation.y_true, positive, threshold)
+    return threshold_metrics(_binary_target(evaluation), positive, threshold)
 
 
 def calibration(evaluation: TestEvaluation, bins: int = 10) -> tuple[np.ndarray, np.ndarray]:
@@ -315,4 +341,4 @@ def calibration(evaluation: TestEvaluation, bins: int = 10) -> tuple[np.ndarray,
     positive = (
         evaluation.y_proba[:, 1] if evaluation.y_proba.shape[1] > 1 else evaluation.y_proba[:, 0]
     )
-    return calibration_curve(positive, evaluation.y_true, bins)
+    return calibration_curve(positive, _binary_target(evaluation), bins)

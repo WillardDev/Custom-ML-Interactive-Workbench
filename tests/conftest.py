@@ -53,6 +53,21 @@ def binary_frame() -> pd.DataFrame:
 
 
 @pytest.fixture
+def string_binary_frame() -> pd.DataFrame:
+    """Binary target with string labels ('No'/'Yes') — exercises label encoding paths."""
+    rng = np.random.default_rng(11)
+    signal = rng.normal(0, 1, size=80)
+    return pd.DataFrame(
+        {
+            "units": rng.integers(1, 9, size=80).astype(float),
+            "band": rng.choice(["a", "b", "c"], size=80),
+            "score": signal,
+            "target": np.where(signal > 0, "Yes", "No"),
+        }
+    )
+
+
+@pytest.fixture
 def prepared_workspace(tmp_path):
     """Factory: a cleaned + preprocessed (train/test split) project ready for training."""
 
