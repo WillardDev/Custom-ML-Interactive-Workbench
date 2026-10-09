@@ -62,11 +62,15 @@ def _workspace(state: ProjectState) -> Workspace:
 
 def _navigation(state: ProjectState) -> str:
     decisions = gates(state)
-    current_id = st.session_state.get("workflow_nav") or TAB_ORDER[0]
+    current_id = st.session_state.get("current_tab", TAB_ORDER[0])
+    if current_id not in TAB_BY_ID:
+        current_id = TAB_ORDER[0]
     current_no = TAB_BY_ID[current_id].number
 
     def label(tab_id: str) -> str:
-        info = TAB_BY_ID[tab_id]
+        info = TAB_BY_ID.get(tab_id)
+        if info is None:
+            return str(tab_id)
         if decisions[tab_id].locked:
             glyph = "🔒 "
         elif info.number < current_no:
@@ -75,7 +79,8 @@ def _navigation(state: ProjectState) -> str:
             glyph = ""
         return f"{glyph}{info.number}. {info.title}"
 
-    return st.sidebar.radio("Workflow", TAB_ORDER, format_func=label, key="workflow_nav")
+    selected = st.sidebar.radio("Workflow", TAB_ORDER, format_func=label, key="workflow_nav")
+    return selected if selected in TAB_BY_ID else current_id
 
 
 def _sidebar_status(state: ProjectState) -> None:
@@ -139,6 +144,7 @@ def main() -> None:
     state = _state()
     workspace = _workspace(state)
     tab_id = _navigation(state)
+    st.session_state["current_tab"] = tab_id
     _render_tab(state, workspace, tab_id)
     _sidebar_status(state)
 

@@ -49,6 +49,30 @@ def test_app_boots_on_data_tab(app: AppTest) -> None:
     assert app.sidebar.radio("workflow_nav").value == "data"
 
 
+def test_nav_survives_formatted_label_in_state(app: AppTest) -> None:
+    # Streamlit serializes the radio selection to the format_func output, so the
+    # widget's session value can be a display label rather than the raw tab id.
+    app.session_state["workflow_nav"] = "🔒 2. Data Cleaning"
+    app.run()
+    assert not app.exception
+    assert app.session_state["current_tab"] in {
+        "data",
+        "cleaning",
+        "preprocessing",
+        "eda",
+        "modelling",
+        "training",
+        "prediction",
+        "error_analysis",
+        "explainability",
+        "outcome",
+    }
+    assert app.header[0].value in {
+        "1. Data Insertion",
+        "2. Data Cleaning",
+    }
+
+
 def test_locked_tab_shows_gate_rule(app: AppTest) -> None:
     app.run()
     app.sidebar.radio("workflow_nav").set_value("training").run()
