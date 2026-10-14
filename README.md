@@ -9,6 +9,61 @@ lifecycle: data in, model out, with explanation and reporting.
 
 Design source: *ML Workbench: Software Documentation v1.0 — Architecture and technique specification*.
 
+## Problem statement
+
+Machine learning on tabular data is usually delivered through notebooks and ad-hoc scripts. Every
+task — classification, regression, forecasting, clustering, anomaly detection, association — pulls in
+different libraries, preprocessing conventions and evaluation metrics, and the analyst has to glue
+them together by hand. This produces four recurring problems:
+
+- **Leakage and correctness** — scalers, encoders and target transforms are easy to fit on the full
+  dataset, quietly invalidating every score downstream.
+- **Reproducibility** — results are hard to recreate because seeds, data versions, preprocessing
+  choices and library versions are rarely captured together.
+- **Accessibility** — model selection, tuning and interpretation demand expertise that many domain
+  users and developers do not have.
+- **Fragmentation** — evaluation, error analysis, explanation and packaging live in separate tools,
+  so valuable findings never reach a deployable artifact.
+
+ML Workbench addresses this by turning the full lifecycle into a single guided, notebook-free
+dashboard: data in, model out, with explanation and reporting.
+
+## Project objectives
+
+1. Provide a guided 10-tab workflow that carries a user from data ingestion to deployable artifacts
+   without writing code.
+2. Guarantee leakage safety by fitting every preprocessing step inside a pipeline on training data
+   only, and verify it with tests.
+3. Adapt the entire experience to the task and model through a capability registry, so new tasks,
+   models and metrics are added as data rather than hard-coded branches.
+4. Make modelling accessible: task inference, task-aware defaults, hyperparameter forms,
+   cross-validated leaderboards and pruned tuning.
+5. Support the breadth of tabular problems — supervised (binary/multiclass/multilabel
+   classification, regression, forecasting) and unsupervised (clustering, dimensionality reduction,
+   anomaly detection, association rules).
+6. Explain outcomes with model-appropriate techniques (linear coefficients, tree/SHAP importances,
+   permutation importance, PDP/ICE, integrated gradients, cluster personas, rule networks).
+7. Make every result reproducible and exportable: a logged step trail, an HTML report, a
+   `reproduce.py` script, a manifest pinning data hash/seed/versions, a model card and packaged
+   predictions.
+8. Keep the system responsive and safe through background jobs, bounded LRU model caching and
+   automatic staleness propagation.
+
+## Research questions
+
+- **RQ1 — Adaptivity:** can a single interface driven by a capability registry serve heterogeneous
+  tasks, model families and metrics without task-specific branching?
+- **RQ2 — Correctness:** how can leakage safety be structurally enforced and verified across
+  splitting, encoding, scaling and target transforms?
+- **RQ3 — Reproducibility:** to what extent can an exported pipeline plus replay script reproduce the
+  original dataset hash and model results on a clean machine?
+- **RQ4 — Metric choice:** how much does task-aware metric selection (e.g. PR-AUC for class
+  imbalance, MAE for skewed targets) change model ranking versus a single fixed metric?
+- **RQ5 — Explainability coverage:** can consistent, comparable explanations be delivered across
+  linear, tree, kernel, distance, neural and rule-based models?
+- **RQ6 — Usability:** how much does a guided, gated workflow reduce the effort and error rate of
+  producing a validated model compared with an unstructured notebook approach?
+
 ## Design principles
 
 1. **Model-aware** — every tab adapts to the task and the model through a capability registry, never hard-coded branches.
